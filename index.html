@@ -9,6 +9,9 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <!-- Plugin para exibir os valores diretamente nos gráficos, sem precisar passar o mouse -->
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+  <!-- jsPDF + AutoTable para exportação de relatórios em PDF -->
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
 </head>
 <body>
 
@@ -383,11 +386,19 @@
         <section class="table-card">
           <div class="table-header">
             <div class="table-title">Consumo Limite por Setor</div>
-            <div class="filter-group" style="min-width: 240px;">
-              <label for="consumoLimiteSetorFilter">Setor</label>
-              <select id="consumoLimiteSetorFilter">
-                <option value="">Selecione um setor...</option>
-              </select>
+            <div class="table-header-actions">
+              <button id="btnExportConsumoLimitePDF" class="btn btn-secondary btn-export-pdf">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15V3m0 12l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"></path>
+                </svg>
+                Extrair PDF
+              </button>
+              <div class="filter-group" style="min-width: 240px;">
+                <label for="consumoLimiteSetorFilter">Setor</label>
+                <select id="consumoLimiteSetorFilter">
+                  <option value="">Selecione um setor...</option>
+                </select>
+              </div>
             </div>
           </div>
 

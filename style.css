@@ -680,6 +680,25 @@ header {
   color: var(--text-primary);
 }
 
+.table-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.btn-export-pdf {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+}
+
+.btn-export-pdf svg {
+  width: 16px;
+  height: 16px;
+}
+
 .table-search {
   position: relative;
   width: 300px;

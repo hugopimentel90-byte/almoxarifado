@@ -752,6 +752,60 @@ function renderConsumoLimiteSetor() {
   });
 }
 
+function exportConsumoLimiteSetorPDF() {
+  const setor = document.getElementById('consumoLimiteSetorFilter').value;
+
+  if (!setor) {
+    showToast("Selecione um setor antes de extrair o PDF.", "error");
+    return;
+  }
+
+  const limiteInfo = computeConsumoLimiteForSector(setor);
+  const rows = Object.keys(limiteInfo)
+    .map(produto => ({ produto, ...limiteInfo[produto] }))
+    .sort((a, b) => a.produto.localeCompare(b.produto));
+
+  if (rows.length === 0) {
+    showToast("Nenhum consumo encontrado para este setor.", "warning");
+    return;
+  }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+
+  const now = new Date();
+  const generatedAt = `${now.toLocaleDateString('pt-BR')} ${now.toLocaleTimeString('pt-BR')}`;
+
+  doc.setFontSize(16);
+  doc.setTextColor(15, 23, 42);
+  doc.text('Consumo Limite por Setor', 14, 18);
+
+  doc.setFontSize(11);
+  doc.setTextColor(71, 85, 105);
+  doc.text(`Setor: ${setor}`, 14, 26);
+  doc.text(`Gerado em: ${generatedAt}`, 14, 32);
+
+  const tableBody = rows.map(row => [
+    row.produto,
+    formatDataLabelValue(row.average),
+    formatDataLabelValue(row.consumedThisMonth),
+    formatDataLabelValue(row.remaining)
+  ]);
+
+  doc.autoTable({
+    startY: 38,
+    head: [['Produto', 'Média Mensal (3 meses anteriores)', 'Retirado no Mês Atual', 'Disponível para Retirar']],
+    body: tableBody,
+    styles: { font: 'helvetica', fontSize: 9, cellPadding: 3 },
+    headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [248, 250, 252] }
+  });
+
+  const fileSafeSetor = setor.replace(/[^a-zA-Z0-9]+/g, '_');
+  const fileDate = now.toISOString().split('T')[0];
+  doc.save(`Consumo_Limite_${fileSafeSetor}_${fileDate}.pdf`);
+}
+
 // --- MÓDULO DE RETIRADA (FORMULÁRIO E LÓGICA) ---
 
 function initializeWithdrawalModule() {
@@ -2010,6 +2064,7 @@ function initEventListeners() {
 
   // Listener do filtro de Consumo Limite por Setor
   document.getElementById('consumoLimiteSetorFilter').addEventListener('change', renderConsumoLimiteSetor);
+  document.getElementById('btnExportConsumoLimitePDF').addEventListener('click', exportConsumoLimiteSetorPDF);
 }
 
 // --- TELA DE ACESSO (SENHA) ---
