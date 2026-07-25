@@ -2012,13 +2012,72 @@ function initEventListeners() {
   document.getElementById('consumoLimiteSetorFilter').addEventListener('change', renderConsumoLimiteSetor);
 }
 
+// --- TELA DE ACESSO (SENHA) ---
+
+const ACCESS_GATE_PASSWORD = "diretoria321";
+const ACCESS_GATE_GRANTED_KEY = "almoxarifado_access_granted";
+
+function initAccessGate() {
+  const gate = document.getElementById('accessGateScreen');
+  const card = gate.querySelector('.access-gate-card');
+  const passwordInput = document.getElementById('accessGatePassword');
+  const errorMsg = document.getElementById('accessGateError');
+  const submitBtn = document.getElementById('btnAccessGateSubmit');
+  const toggleBtn = document.getElementById('btnToggleAccessGatePassword');
+
+  // Se o acesso já foi liberado antes neste navegador, pula direto para o app.
+  if (localStorage.getItem(ACCESS_GATE_GRANTED_KEY) === '1') {
+    gate.remove();
+    initApp();
+    return;
+  }
+
+  function attemptAccess() {
+    if (passwordInput.value === ACCESS_GATE_PASSWORD) {
+      errorMsg.classList.add('hidden');
+      localStorage.setItem(ACCESS_GATE_GRANTED_KEY, '1');
+      gate.classList.add('access-gate-unlocked');
+      setTimeout(() => gate.remove(), 400);
+      initApp();
+    } else {
+      errorMsg.classList.remove('hidden');
+      passwordInput.value = '';
+      passwordInput.focus();
+      card.classList.remove('shake');
+      // Força o reinício da animação mesmo se disparada duas vezes seguidas
+      void card.offsetWidth;
+      card.classList.add('shake');
+    }
+  }
+
+  submitBtn.addEventListener('click', attemptAccess);
+
+  passwordInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      attemptAccess();
+    }
+  });
+
+  toggleBtn.addEventListener('click', () => {
+    passwordInput.type = passwordInput.type === 'password' ? 'text' : 'password';
+    passwordInput.focus();
+  });
+
+  passwordInput.focus();
+}
+
 // --- INICIALIZAÇÃO ---
 
-document.addEventListener('DOMContentLoaded', () => {
+function initApp() {
   initEventListeners();
   initializeWithdrawalModule();
   initializeEntradaModule();
   initializeEstoqueModule();
   initSidebarToggle();
   fetchDashboardData();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  initAccessGate();
 });
