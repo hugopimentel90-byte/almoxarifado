@@ -682,7 +682,7 @@ header {
 
 .table-header-actions {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 1rem;
   flex-wrap: wrap;
 }
@@ -692,11 +692,13 @@ header {
   align-items: center;
   gap: 0.5rem;
   white-space: nowrap;
+  padding: 0.625rem 1rem;
+  font-size: 0.8125rem;
 }
 
 .btn-export-pdf svg {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
 }
 
 .table-search {
