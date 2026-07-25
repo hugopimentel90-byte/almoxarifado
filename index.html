@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard Almoxarifado</title>
+  <link rel="stylesheet" href="style.css">
+  <!-- Chart.js para os gráficos interativos -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Plugin para exibir os valores diretamente nos gráficos, sem precisar passar o mouse -->
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+</head>
+<body>
+
+  <!-- Overlay de Carregamento -->
+  <div id="loadingOverlay" class="loading-overlay">
+    <div class="spinner"></div>
+    <p style="font-weight: 500; color: var(--text-secondary);">Carregando dados do almoxarifado...</p>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toastNotification" class="toast">
+    <span id="toastIcon"></span>
+    <span id="toastText">Operação realizada com sucesso!</span>
+  </div>
+
+  <!-- Modal de Confirmação de Retirada (Data de Pagamento + Senha de Liberação) -->
+  <div id="confirmWithdrawalModal" class="modal-overlay hidden">
+    <div class="modal-card modal-card--wide">
+      <h2 class="modal-title">Confirmar Retirada</h2>
+      <p class="modal-subtitle">Revise os itens (o responsável pode ajustar a quantidade ou remover algum item), informe a data de pagamento e a senha de liberação.</p>
+
+      <div class="confirm-items-header">
+        <span>Produto</span>
+        <span>Quantidade</span>
+        <span>Disponível p/ Retirar</span>
+        <span></span>
+      </div>
+      <div id="confirmWithdrawalItemsList" class="confirm-items-list">
+        <!-- Gerado dinamicamente por JS -->
+      </div>
+
+      <div class="filter-group" style="margin: 1rem 0;">
+        <label for="confirmPagoEm">Pago em</label>
+        <input type="date" id="confirmPagoEm">
+      </div>
+
+      <div class="filter-group">
+        <label for="confirmPassword">Senha de Liberação</label>
+        <input type="password" id="confirmPassword" placeholder="Digite a senha...">
+      </div>
+
+      <p id="confirmPasswordError" class="modal-error-text hidden">Senha incorreta. Tente novamente.</p>
+
+      <div class="form-actions" style="margin-top: 1.5rem;">
+        <button id="btnCancelConfirmModal" class="btn btn-secondary">Cancelar</button>
+        <button id="btnConfirmWithdrawalPassword" class="btn btn-submit">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de Aviso de Estoque Insuficiente -->
+  <div id="insufficientStockModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h2 class="modal-title">Estoque Insuficiente</h2>
+      <p class="modal-subtitle">A quantidade solicitada excede o que há disponível em estoque para os itens abaixo. Ajuste as quantidades e tente novamente.</p>
+
+      <div id="insufficientStockList" class="insufficient-stock-list"></div>
+
+      <div class="form-actions" style="margin-top: 1.5rem; justify-content: flex-end;">
+        <button id="btnCloseInsufficientStockModal" class="btn btn-submit">Entendi</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de Confirmação de Entrada de Material (Senha de Liberação) -->
+  <div id="confirmEntradaModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h2 class="modal-title">Confirmar Entrada de Material</h2>
+      <p class="modal-subtitle">Informe a senha de liberação para enviar os dados à planilha.</p>
+
+      <div class="filter-group">
+        <label for="confirmEntradaPassword">Senha de Liberação</label>
+        <input type="password" id="confirmEntradaPassword" placeholder="Digite a senha...">
+      </div>
+
+      <p id="confirmEntradaPasswordError" class="modal-error-text hidden">Senha incorreta. Tente novamente.</p>
+
+      <div class="form-actions" style="margin-top: 1.5rem;">
+        <button id="btnCancelConfirmEntradaModal" class="btn btn-secondary">Cancelar</button>
+        <button id="btnConfirmEntradaPassword" class="btn btn-submit">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de Categoria para Novo Material (Entrada) -->
+  <div id="newMaterialCategoryModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h2 class="modal-title">Novo Material</h2>
+      <p class="modal-subtitle">Você está cadastrando "<span id="newMaterialCategoryProductName"></span>" como um novo item no estoque. Se quiser, selecione a categoria dele.</p>
+
+      <div class="filter-group">
+        <label for="newMaterialCategorySelect">Categoria</label>
+        <select id="newMaterialCategorySelect">
+          <option value="">Sem categoria</option>
+          <option value="Produto de limpeza">Produto de limpeza</option>
+          <option value="Escritório">Escritório</option>
+          <option value="Industrial">Industrial</option>
+          <option value="Prefeitura">Prefeitura</option>
+        </select>
+      </div>
+
+      <div class="form-actions" style="margin-top: 1.5rem;">
+        <button id="btnCancelNewMaterialCategory" class="btn btn-secondary">Cancelar</button>
+        <button id="btnConfirmNewMaterialCategory" class="btn btn-submit">Adicionar</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="app-layout">
+    
+    <!-- Menu Lateral (Sidebar) -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-logo">
+          <svg style="width:24px;height:24px;flex-shrink:0;" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+          </svg>
+          <span class="sidebar-logo-text">Almoxarifado BI</span>
+        </div>
+      </div>
+
+      <!-- Botão para recolher/expandir o menu -->
+      <button id="btnToggleSidebar" class="sidebar-toggle-btn" title="Recolher menu" aria-label="Recolher menu lateral">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7"></path>
+        </svg>
+      </button>
+
+      <nav class="sidebar-menu">
+        <li class="menu-item">
+          <a id="menuDashboard" class="menu-link active" title="Dashboard">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+            </svg>
+            <span class="menu-link-text">Dashboard</span>
+          </a>
+        </li>
+        <li class="menu-item">
+          <a id="menuRetirada" class="menu-link" title="Retirada">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            </svg>
+            <span class="menu-link-text">Retirada</span>
+          </a>
+        </li>
+        <li class="menu-item">
+          <a id="menuEntrada" class="menu-link" title="Entrada">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            </svg>
+            <span class="menu-link-text">Entrada</span>
+          </a>
+        </li>
+        <li class="menu-item">
+          <a id="menuEstoque" class="menu-link" title="Estoque">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
+            </svg>
+            <span class="menu-link-text">Estoque</span>
+          </a>
+        </li>
+      </nav>
+    </aside>
+
+    <!-- Conteúdo Principal -->
+    <div class="main-content-wrapper">
+      
+      <!-- ABA 1: DASHBOARD -->
+      <main id="viewDashboard" class="view-content container">
+        
+        <!-- Cabeçalho -->
+        <header>
+          <div class="header-title-container">
+            <h1>Dashboard Almoxarifado</h1>
+            <p>
+              <svg style="width:16px;height:16px" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+              </svg>
+              Painel Executivo de Análise de Consumo
+            </p>
+          </div>
+          <div class="header-actions">
+            <div class="last-update" id="lastUpdateContainer">Última atualização: --:--:--</div>
+            <button id="btnRefresh" class="btn-refresh">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 3v5m-.21-5h-5"></path>
+              </svg>
+              Atualizar Dados
+            </button>
+          </div>
+        </header>
+
+        <!-- Banner de Erro -->
+        <div id="errorBanner" class="error-container">
+          <div class="error-title">
+            <svg style="width:20px;height:20px" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+            </svg>
+            <span>Erro ao Carregar Dados</span>
+          </div>
+          <p id="errorMessage">Não foi possível conectar à base de dados no momento. Verifique sua conexão e tente novamente.</p>
+        </div>
+
+        <!-- Painel de Filtros -->
+        <section class="filters-panel">
+          <div class="filters-title">
+            <svg style="width:16px;height:16px" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path>
+            </svg>
+            Filtros de Análise
+          </div>
+          <div class="filters-grid">
+            <div class="filter-group">
+              <label for="filterDateStart">Data Inicial</label>
+              <input type="date" id="filterDateStart">
+            </div>
+            <div class="filter-group">
+              <label for="filterDateEnd">Data Final</label>
+              <input type="date" id="filterDateEnd">
+            </div>
+            <div class="filter-group">
+              <label for="filterMonth">Mês</label>
+              <select id="filterMonth">
+                <option value="all">Todos os Meses</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <label for="filterSector">Setor</label>
+              <select id="filterSector">
+                <option value="all">Todos os Setores</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <label for="filterCategory">Categoria</label>
+              <select id="filterCategory">
+                <option value="all">Todas as Categorias</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <!-- Cards de KPI -->
+        <section class="kpi-container">
+          <!-- Total de Itens -->
+          <div class="kpi-card kpi-items">
+            <div class="kpi-header">
+              <span class="kpi-title">Total de Itens</span>
+              <div class="kpi-icon">
+                <svg style="width:20px;height:20px" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
+                </svg>
+              </div>
+            </div>
+            <div class="kpi-value" id="kpiTotalItems">0</div>
+            <div class="kpi-footer">Volume total consumido</div>
+          </div>
+
+          <!-- Total de Pedidos -->
+          <div class="kpi-card kpi-orders">
+            <div class="kpi-header">
+              <span class="kpi-title">Pedidos Realizados</span>
+              <div class="kpi-icon">
+                <svg style="width:20px;height:20px" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path>
+                </svg>
+              </div>
+            </div>
+            <div class="kpi-value" id="kpiTotalOrders">0</div>
+            <div class="kpi-footer">Pedidos registrados no período</div>
+          </div>
+
+          <!-- Setores Atendidos -->
+          <div class="kpi-card kpi-sectors">
+            <div class="kpi-header">
+              <span class="kpi-title">Setores Atendidos</span>
+              <div class="kpi-icon">
+                <svg style="width:20px;height:20px" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path>
+                </svg>
+              </div>
+            </div>
+            <div class="kpi-value" id="kpiTotalSectors">0</div>
+            <div class="kpi-footer">Departamentos demandantes</div>
+          </div>
+
+          <!-- Categorias -->
+          <div class="kpi-card kpi-categories">
+            <div class="kpi-header">
+              <span class="kpi-title">Categorias Ativas</span>
+              <div class="kpi-icon">
+                <svg style="width:20px;height:20px" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                </svg>
+              </div>
+            </div>
+            <div class="kpi-value" id="kpiTotalCategories">0</div>
+            <div class="kpi-footer">Categorias de produtos no período</div>
+          </div>
+        </section>
+
+        <!-- Seção de Gráficos -->
+        <section class="charts-grid">
+          <!-- Gráfico 1 -->
+          <div class="chart-card">
+            <div class="chart-title">Consumo ao Longo do Tempo (Itens)</div>
+            <div class="chart-wrapper">
+              <canvas id="chartTimeline"></canvas>
+            </div>
+          </div>
+
+          <!-- Gráfico 2 -->
+          <div class="chart-card">
+            <div class="chart-title">Top 10 Produtos mais Consumidos</div>
+            <div class="chart-wrapper">
+              <canvas id="chartTopProducts"></canvas>
+            </div>
+          </div>
+
+          <!-- Gráfico 3 -->
+          <div class="chart-card">
+            <div class="chart-title">Distribuição por Categoria (Quantidade)</div>
+            <div class="chart-wrapper">
+              <canvas id="chartCategories"></canvas>
+            </div>
+          </div>
+
+          <!-- Gráfico 4 -->
+          <div class="chart-card">
+            <div class="chart-title">Consumo por Setor (Top 10)</div>
+            <div class="chart-wrapper">
+              <canvas id="chartSectors"></canvas>
+            </div>
+          </div>
+        </section>
+
+        <!-- Consumo Limite por Setor -->
+        <section class="table-card">
+          <div class="table-header">
+            <div class="table-title">Consumo Limite por Setor</div>
+            <div class="filter-group" style="min-width: 240px;">
+              <label for="consumoLimiteSetorFilter">Setor</label>
+              <select id="consumoLimiteSetorFilter">
+                <option value="">Selecione um setor...</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Produto</th>
+                  <th>Média Mensal (3 meses anteriores)</th>
+                  <th>Retirado no Mês Atual</th>
+                  <th>Disponível para Retirar</th>
+                </tr>
+              </thead>
+              <tbody id="consumoLimiteSetorTableBody">
+                <tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Selecione um setor para consultar</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+
+      <!-- ABA 2: TELA DE RETIRADA -->
+      <main id="viewRetirada" class="view-content container hidden">
+        
+        <!-- Tela 1: Seleção de Categorias -->
+        <section id="retiradaCategorySelection">
+          <header style="margin-bottom: 1.5rem;">
+            <div class="header-title-container">
+              <h1>Retirada de Itens</h1>
+              <p>Selecione a categoria de produtos que deseja retirar do almoxarifado</p>
+            </div>
+          </header>
+          
+          <div class="categories-grid">
+            <!-- Card 1: Limpeza -->
+            <div class="category-card cat-cleaning" data-category="Produto de limpeza">
+              <div class="category-card-icon">🧹</div>
+              <div class="category-card-title">Produto de limpeza</div>
+              <div class="category-card-desc">Materiais de higienização, sacos de lixo, desinfetantes</div>
+            </div>
+            
+            <!-- Card 2: Escritório -->
+            <div class="category-card cat-office" data-category="Escritório">
+              <div class="category-card-icon">📁</div>
+              <div class="category-card-title">Escritório</div>
+              <div class="category-card-desc">Papéis A4, canetas, pastas, colas, grampeadores</div>
+            </div>
+            
+            <!-- Card 3: Industrial -->
+            <div class="category-card cat-industrial" data-category="Industrial">
+              <div class="category-card-icon">⚙️</div>
+              <div class="category-card-title">Industrial</div>
+              <div class="category-card-desc">Equipamentos, ferramentas, calçados e itens pesados</div>
+            </div>
+            
+            <!-- Card 4: Prefeitura -->
+            <div class="category-card cat-cityhall" data-category="Prefeitura">
+              <div class="category-card-icon">🏛️</div>
+              <div class="category-card-title">Prefeitura</div>
+              <div class="category-card-desc">Itens administrativos gerais e demandas da prefeitura</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Tela 2: Formulário de Lançamento -->
+        <section id="retiradaFormSection" class="hidden">
+          <button id="btnGoBackCategories" class="form-header-back">
+            <svg style="width:16px;height:16px" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+            </svg>
+            Voltar para Categorias
+          </button>
+          
+          <div class="form-header-title" style="margin: 1rem 0 1.5rem 0;">
+            Nova Retirada: <span id="selectedCategoryTitle" style="color: var(--color-primary);">--</span>
+          </div>
+
+          <div class="withdrawal-form-card">
+            
+            <!-- Campo: Seleção Multi-itens -->
+            <div class="multiselect-container">
+              <label style="font-size: 0.875rem; font-weight: 600; color: var(--text-secondary);">Produtos para Retirada</label>
+              <button id="btnSelectItems" class="multiselect-btn">
+                <span id="multiselectLabel">Selecione os produtos...</span>
+                <svg style="width:16px;height:16px;color:var(--text-muted);" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                </svg>
+              </button>
+              
+              <!-- Dropdown que abre ao clicar no botão -->
+              <div id="itemsDropdown" class="multiselect-dropdown">
+                <div class="multiselect-search-container">
+                  <input type="text" id="itemsDropdownSearch" class="multiselect-search" placeholder="Buscar produto por nome...">
+                </div>
+                <div id="itemsOptionsContainer" class="multiselect-options">
+                  <!-- Carregado dinamicamente por JS -->
+                </div>
+              </div>
+            </div>
+
+            <!-- Lista Dinâmica de itens selecionados (Item + QTD + UN) -->
+            <div id="selectedItemsRowsContainer" class="selected-items-list hidden">
+              <!-- Grid de itens gerado via JS -->
+            </div>
+
+            <!-- Dados do Lote (Setor e Pedido) -->
+            <div class="form-footer-inputs">
+              <div class="filter-group">
+                <label for="formSector">Setor Solicitante</label>
+                <select id="formSector">
+                  <option value="">Selecione o setor...</option>
+                </select>
+              </div>
+              <div class="filter-group">
+                <label for="formOrderNumber">Nº do Pedido</label>
+                <input type="text" id="formOrderNumber" placeholder="Ex: Pedido 90">
+              </div>
+            </div>
+
+            <!-- Ações -->
+            <div class="form-actions">
+              <button id="btnCancelWithdrawal" class="btn btn-secondary">Cancelar</button>
+              <button id="btnSubmitWithdrawal" class="btn btn-submit">Confirmar Retirada</button>
+            </div>
+
+          </div>
+        </section>
+      </main>
+
+      <!-- ABA 3: TELA DE ENTRADA DE MATERIAL -->
+      <main id="viewEntrada" class="view-content container hidden">
+        <section id="entradaFormSection">
+          <header style="margin-bottom: 1.5rem;">
+            <div class="header-title-container">
+              <h1>Entrada de Material</h1>
+              <p>Registre as quantidades de produtos que estão entrando no estoque</p>
+            </div>
+          </header>
+
+          <div class="withdrawal-form-card">
+
+            <!-- Campo: Seleção Multi-itens -->
+            <div class="multiselect-container">
+              <label style="font-size: 0.875rem; font-weight: 600; color: var(--text-secondary);">Produtos para Entrada</label>
+              <button id="btnSelectItemsEntrada" class="multiselect-btn">
+                <span id="multiselectLabelEntrada">Selecione os produtos...</span>
+                <svg style="width:16px;height:16px;color:var(--text-muted);" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                </svg>
+              </button>
+
+              <!-- Dropdown que abre ao clicar no botão -->
+              <div id="itemsDropdownEntrada" class="multiselect-dropdown">
+                <div class="multiselect-search-container">
+                  <input type="text" id="itemsDropdownSearchEntrada" class="multiselect-search" placeholder="Buscar produto por nome...">
+                </div>
+                <div id="itemsOptionsContainerEntrada" class="multiselect-options">
+                  <!-- Carregado dinamicamente por JS -->
+                </div>
+              </div>
+            </div>
+
+            <!-- Lista Dinâmica de itens selecionados (Item + QTD + UN) -->
+            <div id="selectedItemsRowsContainerEntrada" class="selected-items-list hidden">
+              <!-- Grid de itens gerado via JS -->
+            </div>
+
+            <!-- Ações -->
+            <div class="form-actions">
+              <button id="btnCancelEntrada" class="btn btn-secondary">Cancelar</button>
+              <button id="btnSubmitEntrada" class="btn btn-submit">Confirmar Entrada</button>
+            </div>
+
+          </div>
+        </section>
+      </main>
+
+      <!-- ABA 4: CONSULTA DE ESTOQUE -->
+      <main id="viewEstoque" class="view-content container hidden">
+
+        <!-- Tela 1: Seleção de Categorias -->
+        <section id="estoqueCategorySelection">
+          <header style="margin-bottom: 1.5rem;">
+            <div class="header-title-container">
+              <h1>Consulta de Estoque</h1>
+              <p>Selecione a categoria de produtos para consultar as quantidades disponíveis</p>
+            </div>
+          </header>
+
+          <div class="categories-grid">
+            <div class="category-card cat-cleaning" data-category="Produto de limpeza">
+              <div class="category-card-icon">🧹</div>
+              <div class="category-card-title">Produto de limpeza</div>
+              <div class="category-card-desc">Materiais de higienização, sacos de lixo, desinfetantes</div>
+            </div>
+
+            <div class="category-card cat-office" data-category="Escritório">
+              <div class="category-card-icon">📁</div>
+              <div class="category-card-title">Escritório</div>
+              <div class="category-card-desc">Papéis A4, canetas, pastas, colas, grampeadores</div>
+            </div>
+
+            <div class="category-card cat-industrial" data-category="Industrial">
+              <div class="category-card-icon">⚙️</div>
+              <div class="category-card-title">Industrial</div>
+              <div class="category-card-desc">Equipamentos, ferramentas, calçados e itens pesados</div>
+            </div>
+
+            <div class="category-card cat-cityhall" data-category="Prefeitura">
+              <div class="category-card-icon">🏛️</div>
+              <div class="category-card-title">Prefeitura</div>
+              <div class="category-card-desc">Itens administrativos gerais e demandas da prefeitura</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Tela 2: Lista de Estoque da Categoria -->
+        <section id="estoqueListSection" class="hidden">
+          <button id="btnGoBackEstoqueCategories" class="form-header-back">
+            <svg style="width:16px;height:16px" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+            </svg>
+            Voltar para Categorias
+          </button>
+
+          <div class="form-header-title" style="margin: 1rem 0 1.5rem 0;">
+            Estoque: <span id="selectedEstoqueCategoryTitle" style="color: var(--color-primary);">--</span>
+          </div>
+
+          <section class="table-card">
+            <div class="table-header">
+              <div class="table-title">Quantidades em Estoque</div>
+              <div class="table-search">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                </svg>
+                <input type="text" id="estoqueSearchInput" placeholder="Buscar produto...">
+              </div>
+            </div>
+
+            <div class="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Produto</th>
+                    <th>Unidade</th>
+                    <th>Quantidade em Estoque</th>
+                  </tr>
+                </thead>
+                <tbody id="estoqueTableBody">
+                  <!-- Inserido dinamicamente -->
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+      </main>
+
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
