@@ -13,6 +13,9 @@
  *   H - Pago em
  *   I - Mês do lançamento
  *   J - Categoria
+ *   L - Tempo de retirada em minutos (cronômetro ou preenchimento manual no
+ *       app), gravado apenas na PRIMEIRA linha do lote de itens de cada
+ *       retirada enviada (as demais linhas do mesmo pedido ficam em branco)
  *
  * Mapeamento na aba "Estoque" (entradas de material e consulta de níveis):
  *   A - Nome do produto (lista mestre; se o produto ainda não existir, uma nova
@@ -170,6 +173,10 @@ function handleRetiradaMaterial(ss, items) {
         item.categoria || ""                    // J - Categoria
       ];
       registroSheet.getRange(lastRow, 1, 1, row.length).setValues([row]);
+
+      if (item.tempoRetiradaMinutos !== undefined && item.tempoRetiradaMinutos !== null && item.tempoRetiradaMinutos !== "") {
+        registroSheet.getRange(lastRow, 12).setValue(item.tempoRetiradaMinutos); // L - Tempo de retirada (minutos)
+      }
     });
 
     // 3. Desconta fisicamente o estoque: primeiro da coluna C, depois das

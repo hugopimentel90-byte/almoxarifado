@@ -23,6 +23,13 @@ let selectedCategory = "";
 let uniqueProductNamesForCategory = [];
 let selectedItemsDetails = new Map(); // Armazena { nomeProduto => { qtd: X, un: Y } }
 
+// Estado do cronômetro de Tempo de Retirada
+let withdrawalTimerState = 'idle'; // idle | running | paused | finished
+let withdrawalTimerStartTimestamp = null; // Date.now() do último (re)início
+let withdrawalTimerAccumulatedMs = 0; // ms acumulados entre pausas/retomadas
+let withdrawalTimerIntervalId = null;
+let withdrawalElapsedMinutes = null; // valor final capturado (cronômetro ou manual), null = ainda não registrado
+
 // Estado da Aba de Entrada de Material
 let uniqueProductNamesForEntrada = [];
 let selectedEntradaItemsDetails = new Map(); // Armazena { nomeProduto => { qtd: X, un: Y, categoria?: Z } }
@@ -875,6 +882,14 @@ function initializeWithdrawalModule() {
       closeInsufficientStockModal();
     }
   });
+
+  // Cronômetro de Tempo de Retirada
+  document.getElementById('btnTimerStart').addEventListener('click', handleTimerStart);
+  document.getElementById('btnTimerPause').addEventListener('click', handleTimerPause);
+  document.getElementById('btnTimerResume').addEventListener('click', handleTimerResume);
+  document.getElementById('btnTimerFinish').addEventListener('click', handleTimerFinish);
+  document.getElementById('btnTimerReset').addEventListener('click', handleTimerReset);
+  document.getElementById('formManualTime').addEventListener('input', handleManualTimeInput);
 }
 
 function openWithdrawalForm(category) {
@@ -886,6 +901,7 @@ function openWithdrawalForm(category) {
   document.getElementById('itemsDropdownSearch').value = '';
   document.getElementById('formOrderNumber').value = '';
   document.getElementById('formSector').value = '';
+  resetWithdrawalTimer();
 
   // Filtra itens com base na categoria selecionada
   let items = rawData.filter(item => item.categoria.toLowerCase() === category.toLowerCase());
@@ -1315,7 +1331,7 @@ async function submitWithdrawalForm(pagoEmStr) {
   const yearShort = String(today.getFullYear()).substring(2);
   const formattedDataStr = `${day}/${month}/${yearShort}`;
 
-  selectedItemsDetails.forEach((details, name) => {
+  [...selectedItemsDetails.entries()].forEach(([name, details], index) => {
     // Procura por preço médio no histórico para herdar
     const match = rawData.find(item => item.produto === name);
     const avgPrice = match ? match.precoMedio : 0;
@@ -1332,7 +1348,9 @@ async function submitWithdrawalForm(pagoEmStr) {
       pagoEm: pagoEmStr,
       mes: today.getMonth() + 1,
       categoria: selectedCategory,
-      precoMedio: avgPrice
+      precoMedio: avgPrice,
+      // O tempo de retirada só vai na primeira linha do pedido (coluna L na planilha)
+      tempoRetiradaMinutos: index === 0 ? withdrawalElapsedMinutes : ''
     });
   });
 
@@ -1396,6 +1414,166 @@ function resetWithdrawalForm() {
   document.getElementById('formSector').value = '';
   document.getElementById('selectedItemsRowsContainer').classList.add('hidden');
   updateMultiselectLabel();
+  resetWithdrawalTimer();
+}
+
+// --- CRONÔMETRO DE TEMPO DE RETIRADA ---
+
+function formatElapsedTime(ms) {
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+}
+
+function getWithdrawalTimerElapsedMs() {
+  let elapsed = withdrawalTimerAccumulatedMs;
+  if (withdrawalTimerState === 'running' && withdrawalTimerStartTimestamp) {
+    elapsed += Date.now() - withdrawalTimerStartTimestamp;
+  }
+  return elapsed;
+}
+
+function updateWithdrawalTimerDisplay() {
+  document.getElementById('withdrawalTimerDisplay').textContent = formatElapsedTime(getWithdrawalTimerElapsedMs());
+}
+
+function startWithdrawalTimerTick() {
+  stopWithdrawalTimerTick();
+  withdrawalTimerIntervalId = setInterval(updateWithdrawalTimerDisplay, 1000);
+}
+
+function stopWithdrawalTimerTick() {
+  if (withdrawalTimerIntervalId) {
+    clearInterval(withdrawalTimerIntervalId);
+    withdrawalTimerIntervalId = null;
+  }
+}
+
+function updateTimerButtonsVisibility() {
+  document.getElementById('btnTimerStart').classList.toggle('hidden', withdrawalTimerState !== 'idle');
+  document.getElementById('btnTimerPause').classList.toggle('hidden', withdrawalTimerState !== 'running');
+  document.getElementById('btnTimerResume').classList.toggle('hidden', withdrawalTimerState !== 'paused');
+  document.getElementById('btnTimerFinish').classList.toggle('hidden', !(withdrawalTimerState === 'running' || withdrawalTimerState === 'paused'));
+  document.getElementById('btnTimerReset').classList.toggle('hidden', withdrawalTimerState !== 'finished');
+}
+
+function isWithdrawalTimeCaptured() {
+  return withdrawalElapsedMinutes !== null && withdrawalElapsedMinutes !== undefined;
+}
+
+function updateWithdrawalFormLockState() {
+  const captured = isWithdrawalTimeCaptured();
+
+  document.getElementById('withdrawalLockableSection').classList.toggle('form-locked', !captured);
+  document.getElementById('btnSelectItems').disabled = !captured;
+  document.getElementById('formSector').disabled = !captured;
+  document.getElementById('formOrderNumber').disabled = !captured;
+  document.getElementById('btnSubmitWithdrawal').disabled = !captured;
+
+  const statusEl = document.getElementById('withdrawalTimerStatus');
+  const statusValueEl = document.getElementById('withdrawalTimerStatusValue');
+  if (captured) {
+    statusValueEl.textContent = `${withdrawalElapsedMinutes} min`;
+    statusEl.classList.remove('hidden');
+  } else {
+    statusEl.classList.add('hidden');
+  }
+}
+
+// Trava o outro método de registro de tempo para não haver conflito entre os dois
+function syncTimerAndManualExclusivity() {
+  const manualInput = document.getElementById('formManualTime');
+  const manualHasValue = manualInput.value.trim() !== '';
+  const timerInUse = withdrawalTimerState !== 'idle';
+
+  manualInput.disabled = timerInUse;
+
+  ['btnTimerStart', 'btnTimerPause', 'btnTimerResume', 'btnTimerFinish', 'btnTimerReset'].forEach(id => {
+    document.getElementById(id).disabled = manualHasValue;
+  });
+}
+
+function handleTimerStart() {
+  withdrawalTimerState = 'running';
+  withdrawalTimerStartTimestamp = Date.now();
+  startWithdrawalTimerTick();
+  updateWithdrawalTimerDisplay();
+  updateTimerButtonsVisibility();
+  syncTimerAndManualExclusivity();
+}
+
+function handleTimerPause() {
+  withdrawalTimerAccumulatedMs = getWithdrawalTimerElapsedMs();
+  withdrawalTimerStartTimestamp = null;
+  withdrawalTimerState = 'paused';
+  stopWithdrawalTimerTick();
+  updateWithdrawalTimerDisplay();
+  updateTimerButtonsVisibility();
+}
+
+function handleTimerResume() {
+  withdrawalTimerState = 'running';
+  withdrawalTimerStartTimestamp = Date.now();
+  startWithdrawalTimerTick();
+  updateTimerButtonsVisibility();
+}
+
+function handleTimerFinish() {
+  withdrawalTimerAccumulatedMs = getWithdrawalTimerElapsedMs();
+  withdrawalTimerStartTimestamp = null;
+  withdrawalTimerState = 'finished';
+  stopWithdrawalTimerTick();
+  updateWithdrawalTimerDisplay();
+
+  withdrawalElapsedMinutes = Math.max(Math.round(withdrawalTimerAccumulatedMs / 60000), 0);
+
+  updateTimerButtonsVisibility();
+  updateWithdrawalFormLockState();
+}
+
+function handleTimerReset() {
+  withdrawalTimerState = 'idle';
+  withdrawalTimerAccumulatedMs = 0;
+  withdrawalTimerStartTimestamp = null;
+  withdrawalElapsedMinutes = null;
+  stopWithdrawalTimerTick();
+  updateWithdrawalTimerDisplay();
+  updateTimerButtonsVisibility();
+  syncTimerAndManualExclusivity();
+  updateWithdrawalFormLockState();
+}
+
+function handleManualTimeInput(e) {
+  const raw = e.target.value.trim();
+  const val = parseInt(raw, 10);
+
+  if (raw !== '' && !isNaN(val) && val >= 0) {
+    withdrawalElapsedMinutes = val;
+  } else if (withdrawalTimerState !== 'finished') {
+    withdrawalElapsedMinutes = null;
+  }
+
+  syncTimerAndManualExclusivity();
+  updateWithdrawalFormLockState();
+}
+
+function resetWithdrawalTimer() {
+  stopWithdrawalTimerTick();
+  withdrawalTimerState = 'idle';
+  withdrawalTimerStartTimestamp = null;
+  withdrawalTimerAccumulatedMs = 0;
+  withdrawalElapsedMinutes = null;
+
+  document.getElementById('withdrawalTimerDisplay').textContent = '00:00:00';
+  document.getElementById('formManualTime').value = '';
+  document.getElementById('formManualTime').disabled = false;
+
+  updateTimerButtonsVisibility();
+  syncTimerAndManualExclusivity();
+  updateWithdrawalFormLockState();
 }
 
 function showInsufficientStockModal(details) {

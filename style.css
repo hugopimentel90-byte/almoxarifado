@@ -1198,6 +1198,138 @@ tr:hover td { background-color: var(--bg-primary); }
   gap: 1.5rem;
 }
 
+/* Trava visual/funcional do bloco de produtos/setor/pedido até o tempo ser registrado */
+.form-locked {
+  opacity: 0.5;
+  pointer-events: none;
+  user-select: none;
+  transition: opacity 0.3s ease;
+}
+
+/* Tempo de Retirada (cronômetro + preenchimento manual) */
+.withdrawal-timer-section {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background-color: var(--bg-primary);
+  padding: 1.25rem;
+  margin: 1.5rem 0;
+}
+
+.withdrawal-timer-label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 0.875rem;
+}
+
+.withdrawal-timer-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.withdrawal-timer-display {
+  font-size: 2rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  letter-spacing: 0.02em;
+}
+
+.withdrawal-timer-controls {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.btn-timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.btn-timer svg {
+  width: 15px;
+  height: 15px;
+}
+
+.btn-timer-start,
+.btn-timer-resume {
+  background-color: var(--color-success);
+  color: #ffffff;
+}
+
+.btn-timer-start:hover,
+.btn-timer-resume:hover {
+  background-color: #0c9c6d;
+}
+
+.btn-timer-pause {
+  background-color: var(--color-warning);
+  color: #ffffff;
+}
+
+.btn-timer-pause:hover {
+  background-color: #d97706;
+}
+
+.btn-timer-finish {
+  background-color: var(--color-primary);
+  color: #ffffff;
+}
+
+.btn-timer-finish:hover {
+  background-color: var(--color-primary-hover);
+}
+
+.btn-timer-reset {
+  background-color: #ffffff;
+  border-color: var(--border-color);
+  color: var(--text-secondary);
+}
+
+.btn-timer-reset:hover {
+  border-color: var(--border-color-hover);
+  color: var(--text-primary);
+}
+
+.withdrawal-timer-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1.25rem 0 1rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+
+.withdrawal-timer-divider::before,
+.withdrawal-timer-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background-color: var(--border-color);
+}
+
+.withdrawal-timer-status {
+  margin-top: 0.875rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-success);
+}
+
 @media (max-width: 600px) {
   .form-footer-inputs {
     grid-template-columns: 1fr;
