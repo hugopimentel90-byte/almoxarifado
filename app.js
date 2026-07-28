@@ -119,8 +119,21 @@ function getLocalWithdrawals() {
   if (!data) return [];
   try {
     const parsed = JSON.parse(data);
+
+    // Descarta automaticamente qualquer retirada local mais antiga que 48h.
+    // Isso evita que um registro que nunca bateu com o CSV (por falha de rede,
+    // formatação diferente, etc.) fique preso no navegador para sempre — em
+    // 48h o CSV publicado já teve tempo de sobra para sincronizar de verdade.
+    const maxAgeMs = 48 * 60 * 60 * 1000;
+    const now = Date.now();
+    const stillValid = parsed.filter(item => (now - new Date(item.data).getTime()) <= maxAgeMs);
+
+    if (stillValid.length !== parsed.length) {
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(stillValid));
+    }
+
     // Converte a string de data de volta para objeto Date
-    return parsed.map(item => {
+    return stillValid.map(item => {
       item.data = new Date(item.data);
       const pagoEmDateObj = parseDate(item.pagoEm);
       item.filterDate = pagoEmDateObj || item.data;
@@ -2240,6 +2253,16 @@ function initEventListeners() {
   const btnRefresh = document.getElementById('btnRefresh');
   if (btnRefresh) {
     btnRefresh.addEventListener('click', fetchDashboardData);
+  }
+
+  // Listener do botão de Limpar Cache Local
+  const btnClearLocalCache = document.getElementById('btnClearLocalCache');
+  if (btnClearLocalCache) {
+    btnClearLocalCache.addEventListener('click', () => {
+      localStorage.removeItem(LOCAL_STORAGE_KEY);
+      showToast("Cache local limpo! Recarregando os dados da planilha...", "success");
+      fetchDashboardData();
+    });
   }
 
   // Listeners dos filtros

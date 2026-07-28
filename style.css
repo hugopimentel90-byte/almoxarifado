@@ -459,6 +459,18 @@ header {
   background-color: var(--color-primary-hover);
 }
 
+.btn-clear-cache {
+  background-color: #ffffff;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.btn-clear-cache:hover {
+  background-color: var(--bg-primary);
+  border-color: var(--border-color-hover);
+  color: var(--text-primary);
+}
+
 .btn-refresh svg {
   width: 16px;
   height: 16px;
