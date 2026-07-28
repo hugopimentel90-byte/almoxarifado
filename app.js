@@ -122,6 +122,8 @@ function getLocalWithdrawals() {
     // Converte a string de data de volta para objeto Date
     return parsed.map(item => {
       item.data = new Date(item.data);
+      const pagoEmDateObj = parseDate(item.pagoEm);
+      item.filterDate = pagoEmDateObj || item.data;
       return item;
     });
   } catch (e) {
@@ -195,16 +197,23 @@ async function fetchDashboardData() {
       const qtdNum = parseNumber(qtdVal);
       if (qtdNum <= 0) continue;
 
+      const pagoEmVal = cells[headerIndexes['pagoem']] || '';
+      const pagoEmDateObj = parseDate(pagoEmVal);
+
       rawData.push({
         produto: produtoVal,
         qtd: qtdNum,
         un: cells[headerIndexes['un']] || '',
         data: dateObj,
         dataStr: dataVal,
+        // Data usada pelos filtros/KPIs/gráficos do Dashboard: prioriza "Pago em"
+        // (quando o pedido foi de fato processado) e cai para "Data" só quando
+        // ainda não há "Pago em" preenchido (pedido pendente).
+        filterDate: pagoEmDateObj || dateObj,
         setor: cells[headerIndexes['setor']] || 'Não Especificado',
         pedido: cells[headerIndexes['pedido']] || 'Sem Pedido',
         observacao: cells[headerIndexes['observacao']] || '',
-        pagoEm: cells[headerIndexes['pagoem']] || '',
+        pagoEm: pagoEmVal,
         mes: parseInt(cells[headerIndexes['mes']], 10) || (dateObj.getMonth() + 1),
         categoria: cells[headerIndexes['categoria']] || 'Outros',
         precoMedio: parseNumber(cells[headerIndexes['precomedio']])
@@ -369,7 +378,7 @@ function populateFilters() {
     categorySelect.appendChild(opt);
   });
 
-  const dates = rawData.map(item => item.data);
+  const dates = rawData.map(item => item.filterDate);
   if (dates.length > 0) {
     const minDate = new Date(Math.min(...dates));
     const maxDate = new Date(Math.max(...dates));
@@ -397,8 +406,8 @@ function applyFilters() {
   const end = dateEndVal ? new Date(dateEndVal + 'T23:59:59') : null;
 
   currentFilteredData = rawData.filter(item => {
-    if (start && item.data < start) return false;
-    if (end && item.data > end) return false;
+    if (start && item.filterDate < start) return false;
+    if (end && item.filterDate > end) return false;
     if (monthVal !== 'all' && item.mes.toString() !== monthVal) return false;
     if (sectorVal !== 'all' && item.setor !== sectorVal) return false;
     if (categoryVal !== 'all' && item.categoria !== categoryVal) return false;
