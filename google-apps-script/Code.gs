@@ -40,6 +40,26 @@
  *   da mais antiga para a mais nova). Se o saldo não for suficiente, a retirada
  *   inteira é rejeitada (nada é gravado) e o app mostra um aviso ao usuário.
  *
+ * Aba "Liberacao" (Kanban de Liberação de Documentos) — criada automaticamente
+ * pelo script na primeira vez que for usada, com as colunas:
+ *   A - ID do card
+ *   B - Setor
+ *   C - Título
+ *   D - Descrição
+ *   E - Nome do arquivo anexado
+ *   F - URL do arquivo no Google Drive
+ *   G - Status atual (Setor | Encarregado | Imediato | Liberados)
+ *   H - Criado em
+ *   I - Transmitido em (Setor -> Encarregado)
+ *   J - Aprovado pelo Encarregado em
+ *   K - Aprovado pelo Imediato em (= liberado em)
+ *   L - Última ação (ex: registro de uma recusa)
+ *
+ *   O documento anexado é salvo no Google Drive (pasta "Almoxarifado -
+ *   Documentos de Liberação"), compartilhado como "qualquer pessoa com o
+ *   link pode visualizar". A aprovação do Encarregado e do Imediato exige
+ *   senha; a etapa de "Transmitir" (Setor -> Encarregado) e a recusa não.
+ *
  * COMO INSTALAR:
  * 1. Abra a planilha do Google Sheets.
  * 2. Menu Extensões > Apps Script.
@@ -59,6 +79,11 @@ const REGISTRO_SHEET_NAME = "Registro";
 const ESTOQUE_SHEET_NAME = "Estoque";
 const ESTOQUE_START_COLUMN = 6; // coluna F
 
+const LIBERACAO_SHEET_NAME = "Liberacao";
+const LIBERACAO_DRIVE_FOLDER_NAME = "Almoxarifado - Documentos de Liberação";
+const LIBERACAO_ENCARREGADO_PASSWORD = "encarregado321";
+const LIBERACAO_IMEDIATO_PASSWORD = "imediato321";
+
 function doPost(e) {
   try {
     if (!e || !e.postData || !e.postData.contents) {
@@ -67,24 +92,24 @@ function doPost(e) {
 
     const payload = JSON.parse(e.postData.contents);
     const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const tipo = (payload && payload.tipo) || "retirada";
 
-    let tipo = "retirada";
-    let items = payload;
-
-    if (payload && !Array.isArray(payload) && Array.isArray(payload.items)) {
-      tipo = payload.tipo || "retirada";
-      items = payload.items;
+    let response;
+    if (tipo === "entrada") {
+      response = { count: handleEntradaMaterial(ss, normalizeItemsPayload(payload)) };
+    } else if (tipo === "liberacao_criar") {
+      response = { card: handleLiberacaoCriar(ss, payload) };
+    } else if (tipo === "liberacao_avancar") {
+      response = { card: handleLiberacaoAvancar(ss, payload) };
+    } else if (tipo === "liberacao_recusar") {
+      response = { card: handleLiberacaoRecusar(ss, payload) };
+    } else {
+      response = { count: handleRetiradaMaterial(ss, normalizeItemsPayload(payload)) };
     }
-    if (!Array.isArray(items)) {
-      items = [items];
-    }
 
-    const count = (tipo === "entrada")
-      ? handleEntradaMaterial(ss, items)
-      : handleRetiradaMaterial(ss, items);
-
+    response.status = "success";
     return ContentService
-      .createTextOutput(JSON.stringify({ status: "success", count: count }))
+      .createTextOutput(JSON.stringify(response))
       .setMimeType(ContentService.MimeType.JSON);
 
   } catch (err) {
@@ -97,6 +122,21 @@ function doPost(e) {
       .createTextOutput(JSON.stringify(response))
       .setMimeType(ContentService.MimeType.JSON);
   }
+}
+
+/**
+ * Normaliza o payload de retirada/entrada, que pode chegar como um array
+ * puro de itens (formato antigo) ou como { tipo, items: [...] }.
+ */
+function normalizeItemsPayload(payload) {
+  let items = payload;
+  if (payload && !Array.isArray(payload) && Array.isArray(payload.items)) {
+    items = payload.items;
+  }
+  if (!Array.isArray(items)) {
+    items = [items];
+  }
+  return items;
 }
 
 /**
@@ -359,6 +399,9 @@ function doGet(e) {
     if (e && e.parameter && e.parameter.action === "estoque") {
       return getEstoqueLevels();
     }
+    if (e && e.parameter && e.parameter.action === "liberacao") {
+      return getLiberacaoCards();
+    }
 
     return ContentService
       .createTextOutput(JSON.stringify({ status: "ok", message: "Web App ativo." }))
@@ -426,5 +469,232 @@ function getEstoqueLevels() {
 
   return ContentService
     .createTextOutput(JSON.stringify({ status: "success", items: items }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// --- LIBERAÇÃO DE DOCUMENTOS (KANBAN) ---
+
+/**
+ * Retorna a aba "Liberacao", criando-a com o cabeçalho correto se ainda
+ * não existir.
+ */
+function getOrCreateLiberacaoSheet(ss) {
+  let sheet = ss.getSheetByName(LIBERACAO_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(LIBERACAO_SHEET_NAME);
+    sheet.appendRow([
+      "ID", "Setor", "Titulo", "Descricao", "NomeArquivo", "UrlArquivo",
+      "Status", "CriadoEm", "TransmitidoEm", "AprovadoEncarregadoEm",
+      "AprovadoImediatoEm", "UltimaAcao"
+    ]);
+  }
+  return sheet;
+}
+
+/**
+ * Retorna a pasta do Google Drive usada para os documentos de liberação,
+ * criando-a se ainda não existir.
+ */
+function getOrCreateLiberacaoFolder() {
+  const folders = DriveApp.getFoldersByName(LIBERACAO_DRIVE_FOLDER_NAME);
+  if (folders.hasNext()) {
+    return folders.next();
+  }
+  return DriveApp.createFolder(LIBERACAO_DRIVE_FOLDER_NAME);
+}
+
+/**
+ * Procura a linha de um card pelo ID (coluna A). Retorna o número da linha
+ * ou -1 se não encontrado.
+ */
+function findLiberacaoRowById(sheet, id) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return -1;
+
+  const ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === String(id)) {
+      return i + 2;
+    }
+  }
+  return -1;
+}
+
+function formatLiberacaoTimestamp(date) {
+  return Utilities.formatDate(date, Session.getScriptTimeZone(), "dd/MM/yy HH:mm");
+}
+
+function liberacaoRowToCard(row) {
+  return {
+    id: row[0],
+    setor: row[1],
+    titulo: row[2],
+    descricao: row[3],
+    nomeArquivo: row[4],
+    urlArquivo: row[5],
+    status: row[6],
+    criadoEm: row[7],
+    transmitidoEm: row[8],
+    aprovadoEncarregadoEm: row[9],
+    aprovadoImediatoEm: row[10],
+    ultimaAcao: row[11]
+  };
+}
+
+/**
+ * Cria um novo card na coluna "Setor", salvando o documento anexado (se
+ * houver) no Google Drive.
+ */
+function handleLiberacaoCriar(ss, payload) {
+  const sheet = getOrCreateLiberacaoSheet(ss);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+
+  try {
+    const setor = (payload.setor || "").trim();
+    const titulo = (payload.titulo || "").trim();
+    const descricao = (payload.descricao || "").trim();
+
+    if (!setor) throw new Error("Informe o setor.");
+    if (!titulo) throw new Error("Informe o título do documento.");
+
+    let nomeArquivo = "";
+    let urlArquivo = "";
+
+    if (payload.arquivo && payload.arquivo.base64) {
+      const folder = getOrCreateLiberacaoFolder();
+      const bytes = Utilities.base64Decode(payload.arquivo.base64);
+      const blob = Utilities.newBlob(
+        bytes,
+        payload.arquivo.mimeType || "application/octet-stream",
+        payload.arquivo.nome || "documento"
+      );
+      const file = folder.createFile(blob);
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      nomeArquivo = payload.arquivo.nome || file.getName();
+      urlArquivo = file.getUrl();
+    }
+
+    const id = "LIB-" + new Date().getTime();
+    const nowStr = formatLiberacaoTimestamp(new Date());
+
+    const row = [id, setor, titulo, descricao, nomeArquivo, urlArquivo, "Setor", nowStr, "", "", "", ""];
+    sheet.appendRow(row);
+
+    return liberacaoRowToCard(row);
+
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Avança um card para a próxima etapa: Setor -> Encarregado (sem senha),
+ * Encarregado -> Imediato (senha do Encarregado), Imediato -> Liberados
+ * (senha do Imediato).
+ */
+function handleLiberacaoAvancar(ss, payload) {
+  const sheet = getOrCreateLiberacaoSheet(ss);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+
+  try {
+    const id = payload.id;
+    if (!id) throw new Error("ID do card não informado.");
+
+    const rowIndex = findLiberacaoRowById(sheet, id);
+    if (rowIndex === -1) throw new Error("Card não encontrado.");
+
+    const status = sheet.getRange(rowIndex, 7).getValue();
+    const nowStr = formatLiberacaoTimestamp(new Date());
+
+    if (status === "Setor") {
+      sheet.getRange(rowIndex, 7).setValue("Encarregado");
+      sheet.getRange(rowIndex, 9).setValue(nowStr); // I - TransmitidoEm
+    } else if (status === "Encarregado") {
+      if (payload.senha !== LIBERACAO_ENCARREGADO_PASSWORD) {
+        throw new Error("Senha do Encarregado incorreta.");
+      }
+      sheet.getRange(rowIndex, 7).setValue("Imediato");
+      sheet.getRange(rowIndex, 10).setValue(nowStr); // J - AprovadoEncarregadoEm
+    } else if (status === "Imediato") {
+      if (payload.senha !== LIBERACAO_IMEDIATO_PASSWORD) {
+        throw new Error("Senha do Imediato incorreta.");
+      }
+      sheet.getRange(rowIndex, 7).setValue("Liberados");
+      sheet.getRange(rowIndex, 11).setValue(nowStr); // K - AprovadoImediatoEm
+    } else {
+      throw new Error("Este documento já está liberado e não pode avançar mais.");
+    }
+
+    const updatedRow = sheet.getRange(rowIndex, 1, 1, 12).getValues()[0];
+    return liberacaoRowToCard(updatedRow);
+
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Recusa um card, devolvendo-o para a coluna anterior: Encarregado -> Setor,
+ * Imediato -> Encarregado. Não exige senha.
+ */
+function handleLiberacaoRecusar(ss, payload) {
+  const sheet = getOrCreateLiberacaoSheet(ss);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+
+  try {
+    const id = payload.id;
+    if (!id) throw new Error("ID do card não informado.");
+
+    const rowIndex = findLiberacaoRowById(sheet, id);
+    if (rowIndex === -1) throw new Error("Card não encontrado.");
+
+    const status = sheet.getRange(rowIndex, 7).getValue();
+    const nowStr = formatLiberacaoTimestamp(new Date());
+
+    let novoStatus;
+    let etapa;
+    if (status === "Encarregado") {
+      novoStatus = "Setor";
+      etapa = "Encarregado";
+    } else if (status === "Imediato") {
+      novoStatus = "Encarregado";
+      etapa = "Imediato";
+    } else {
+      throw new Error("Este documento não pode ser recusado nesta etapa.");
+    }
+
+    sheet.getRange(rowIndex, 7).setValue(novoStatus);
+    sheet.getRange(rowIndex, 12).setValue("Recusado pelo " + etapa + " em " + nowStr); // L - UltimaAcao
+
+    const updatedRow = sheet.getRange(rowIndex, 1, 1, 12).getValues()[0];
+    return liberacaoRowToCard(updatedRow);
+
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Retorna todos os cards da esteira de liberação.
+ */
+function getLiberacaoCards() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = getOrCreateLiberacaoSheet(ss);
+  const lastRow = sheet.getLastRow();
+  const cards = [];
+
+  if (lastRow >= 2) {
+    const values = sheet.getRange(2, 1, lastRow - 1, 12).getValues();
+    values.forEach(function (row) {
+      if (!row[0]) return;
+      cards.push(liberacaoRowToCard(row));
+    });
+  }
+
+  return ContentService
+    .createTextOutput(JSON.stringify({ status: "success", cards: cards }))
     .setMimeType(ContentService.MimeType.JSON);
 }

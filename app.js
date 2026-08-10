@@ -41,6 +41,11 @@ let stockData = []; // Armazena [{ produto, un, total }] vindo da aba "Estoque"
 let currentEstoqueCategory = "";
 let estoqueSearchQuery = "";
 
+// Estado da Aba de Liberação de Documentos
+const LIBERACAO_COLUMNS = ['Setor', 'Encarregado', 'Imediato', 'Liberados'];
+let liberacaoCards = [];
+let currentLiberacaoCardId = null;
+
 // Lista de colunas obrigatórias
 const REQUIRED_HEADERS = ['produto', 'qtd', 'un', 'data', 'setor', 'pedido', 'mes', 'categoria', 'precomedio'];
 
@@ -283,19 +288,23 @@ function switchTab(tabName) {
   const menuRetirada = document.getElementById('menuRetirada');
   const menuEntrada = document.getElementById('menuEntrada');
   const menuEstoque = document.getElementById('menuEstoque');
+  const menuLiberacao = document.getElementById('menuLiberacao');
   const viewDashboard = document.getElementById('viewDashboard');
   const viewRetirada = document.getElementById('viewRetirada');
   const viewEntrada = document.getElementById('viewEntrada');
   const viewEstoque = document.getElementById('viewEstoque');
+  const viewLiberacao = document.getElementById('viewLiberacao');
 
   menuDashboard.classList.remove('active');
   menuRetirada.classList.remove('active');
   menuEntrada.classList.remove('active');
   menuEstoque.classList.remove('active');
+  menuLiberacao.classList.remove('active');
   viewDashboard.classList.add('hidden');
   viewRetirada.classList.add('hidden');
   viewEntrada.classList.add('hidden');
   viewEstoque.classList.add('hidden');
+  viewLiberacao.classList.add('hidden');
 
   if (tabName === 'dashboard') {
     menuDashboard.classList.add('active');
@@ -317,6 +326,10 @@ function switchTab(tabName) {
     viewEstoque.classList.remove('hidden');
     showEstoqueScreen('categories');
     fetchStockLevels();
+  } else if (tabName === 'liberacao') {
+    menuLiberacao.classList.add('active');
+    viewLiberacao.classList.remove('hidden');
+    fetchLiberacaoCards();
   }
 }
 
@@ -2170,6 +2183,372 @@ async function fetchStockLevels() {
   }
 }
 
+// --- MÓDULO DE LIBERAÇÃO DE DOCUMENTOS (KANBAN) ---
+
+function initializeLiberacaoModule() {
+  document.getElementById('btnNewLiberacaoCard').addEventListener('click', openNewLiberacaoCardModal);
+  document.getElementById('btnCancelNewLiberacaoCard').addEventListener('click', closeNewLiberacaoCardModal);
+  document.getElementById('btnConfirmNewLiberacaoCard').addEventListener('click', handleCreateLiberacaoCard);
+  document.getElementById('newLiberacaoCardModal').addEventListener('click', (e) => {
+    if (e.target.id === 'newLiberacaoCardModal') {
+      closeNewLiberacaoCardModal();
+    }
+  });
+
+  document.getElementById('btnCloseLiberacaoDetail').addEventListener('click', closeLiberacaoCardDetail);
+  document.getElementById('btnLiberacaoAdvance').addEventListener('click', handleLiberacaoAdvance);
+  document.getElementById('btnLiberacaoReject').addEventListener('click', handleLiberacaoReject);
+  document.getElementById('liberacaoCardDetailModal').addEventListener('click', (e) => {
+    if (e.target.id === 'liberacaoCardDetailModal') {
+      closeLiberacaoCardDetail();
+    }
+  });
+
+  document.getElementById('liberacaoActionPassword').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleLiberacaoAdvance();
+    }
+  });
+}
+
+async function fetchLiberacaoCards() {
+  if (!SCRIPT_URL || SCRIPT_URL.trim() === "") {
+    showToast("Configure a SCRIPT_URL para consultar a esteira de liberação.", "warning");
+    return;
+  }
+
+  showLoading(true);
+  try {
+    const response = await fetch(`${SCRIPT_URL}?action=liberacao&t=${new Date().getTime()}`, {
+      method: 'GET',
+      cache: 'no-store'
+    });
+
+    if (!response.ok) {
+      throw new Error(`Falha na requisição HTTP: ${response.status} ${response.statusText}`);
+    }
+
+    const resData = await response.json();
+    if (resData && resData.status === 'success' && Array.isArray(resData.cards)) {
+      liberacaoCards = resData.cards;
+    } else {
+      throw new Error(resData.message || "Erro desconhecido ao consultar a esteira de liberação.");
+    }
+  } catch (error) {
+    console.error("Erro ao consultar esteira de liberação:", error);
+    showToast("Erro ao consultar a esteira de liberação.", "error");
+    liberacaoCards = [];
+  } finally {
+    showLoading(false);
+  }
+
+  renderLiberacaoBoard();
+}
+
+function renderLiberacaoBoard() {
+  LIBERACAO_COLUMNS.forEach(status => {
+    const container = document.getElementById(`kanbanColumn${status}`);
+    const countEl = document.getElementById(`kanbanCount${status}`);
+    if (!container) return;
+
+    container.innerHTML = '';
+    const cardsInColumn = liberacaoCards.filter(c => c.status === status);
+    countEl.textContent = cardsInColumn.length;
+
+    if (cardsInColumn.length === 0) {
+      container.innerHTML = `<div class="kanban-column-empty">Nenhum documento aqui</div>`;
+      return;
+    }
+
+    cardsInColumn.forEach(card => {
+      container.appendChild(createLiberacaoCardElement(card));
+    });
+  });
+}
+
+function createLiberacaoCardElement(card) {
+  const el = document.createElement('div');
+  el.className = 'kanban-card';
+  el.innerHTML = `
+    <span class="kanban-card-sector">${card.setor}</span>
+    <div class="kanban-card-title" title="${card.titulo}">${card.titulo}</div>
+    <div class="kanban-card-meta">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+      </svg>
+      <span>${card.nomeArquivo || 'Sem anexo'}</span>
+    </div>
+  `;
+  el.addEventListener('click', () => openLiberacaoCardDetail(card.id));
+  return el;
+}
+
+function populateLiberacaoSectorSelect() {
+  const select = document.getElementById('newCardSetor');
+  select.innerHTML = '<option value="">Selecione o setor...</option>';
+
+  const uniqueSectors = [...new Set(rawData.map(item => item.setor))].sort();
+  uniqueSectors.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s;
+    opt.textContent = s;
+    select.appendChild(opt);
+  });
+}
+
+function openNewLiberacaoCardModal() {
+  populateLiberacaoSectorSelect();
+  document.getElementById('newCardSetor').value = '';
+  document.getElementById('newCardTitulo').value = '';
+  document.getElementById('newCardDescricao').value = '';
+  document.getElementById('newCardFile').value = '';
+  document.getElementById('newCardError').classList.add('hidden');
+  document.getElementById('newLiberacaoCardModal').classList.remove('hidden');
+}
+
+function closeNewLiberacaoCardModal() {
+  document.getElementById('newLiberacaoCardModal').classList.add('hidden');
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = () => reject(new Error("Não foi possível ler o arquivo."));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleCreateLiberacaoCard() {
+  const setor = document.getElementById('newCardSetor').value;
+  const titulo = document.getElementById('newCardTitulo').value.trim();
+  const descricao = document.getElementById('newCardDescricao').value.trim();
+  const fileInput = document.getElementById('newCardFile');
+  const file = fileInput.files[0];
+  const errorEl = document.getElementById('newCardError');
+  errorEl.classList.add('hidden');
+
+  if (!setor) {
+    showToast("Selecione o setor.", "error");
+    return;
+  }
+  if (!titulo) {
+    showToast("Informe o título do documento.", "error");
+    return;
+  }
+  if (!file) {
+    showToast("Anexe o documento.", "error");
+    return;
+  }
+
+  const MAX_FILE_SIZE = 8 * 1024 * 1024; // 8MB
+  if (file.size > MAX_FILE_SIZE) {
+    errorEl.textContent = "Arquivo muito grande. O limite é 8MB.";
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  if (!SCRIPT_URL || SCRIPT_URL.trim() === "") {
+    showToast("Configure a SCRIPT_URL para enviar o documento.", "warning");
+    return;
+  }
+
+  showLoading(true);
+  try {
+    const base64 = await readFileAsBase64(file);
+
+    const response = await fetch(SCRIPT_URL, {
+      method: 'POST',
+      mode: 'cors',
+      headers: {
+        'Content-Type': 'text/plain',
+      },
+      body: JSON.stringify({
+        tipo: 'liberacao_criar',
+        setor: setor,
+        titulo: titulo,
+        descricao: descricao,
+        arquivo: {
+          nome: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          base64: base64
+        }
+      })
+    });
+
+    const resData = await response.json();
+    if (resData && resData.status === 'success') {
+      showToast("Documento enviado para o setor!", "success");
+      closeNewLiberacaoCardModal();
+      await fetchLiberacaoCards();
+    } else {
+      throw new Error(resData.message || "Erro desconhecido ao criar o card.");
+    }
+  } catch (error) {
+    console.error("Erro ao criar card de liberação:", error);
+    errorEl.textContent = error.message || "Erro ao enviar o documento. Tente novamente.";
+    errorEl.classList.remove('hidden');
+  } finally {
+    showLoading(false);
+  }
+}
+
+function openLiberacaoCardDetail(id) {
+  const card = liberacaoCards.find(c => c.id === id);
+  if (!card) return;
+
+  currentLiberacaoCardId = id;
+
+  document.getElementById('liberacaoDetailTitulo').textContent = card.titulo;
+  document.getElementById('liberacaoDetailSetor').textContent = card.setor;
+  document.getElementById('liberacaoDetailStatus').textContent = card.status;
+  document.getElementById('liberacaoDetailDescricao').textContent = card.descricao || 'Sem descrição.';
+
+  const fileLink = document.getElementById('liberacaoDetailFileLink');
+  const fileNameEl = document.getElementById('liberacaoDetailFileName');
+  if (card.urlArquivo) {
+    fileLink.href = card.urlArquivo;
+    fileLink.classList.remove('hidden');
+    fileNameEl.textContent = card.nomeArquivo || 'Abrir Documento';
+  } else {
+    fileLink.classList.add('hidden');
+  }
+
+  const timeline = document.getElementById('liberacaoDetailTimeline');
+  const steps = [
+    { label: 'Criado em', value: card.criadoEm },
+    { label: 'Transmitido em', value: card.transmitidoEm },
+    { label: 'Aprovado (Encarregado) em', value: card.aprovadoEncarregadoEm },
+    { label: 'Aprovado (Imediato) em', value: card.aprovadoImediatoEm }
+  ].filter(s => s.value);
+
+  let timelineHtml = steps.map(s => `
+    <div class="liberacao-timeline-item">
+      <span class="liberacao-timeline-label">${s.label}</span>
+      <span class="liberacao-timeline-value">${s.value}</span>
+    </div>
+  `).join('');
+
+  if (card.ultimaAcao) {
+    timelineHtml += `
+      <div class="liberacao-timeline-item">
+        <span class="liberacao-timeline-label">Última ação</span>
+        <span class="liberacao-timeline-value">${card.ultimaAcao}</span>
+      </div>
+    `;
+  }
+  timeline.innerHTML = timelineHtml;
+
+  const passwordSection = document.getElementById('liberacaoDetailPasswordSection');
+  const passwordInput = document.getElementById('liberacaoActionPassword');
+  const errorEl = document.getElementById('liberacaoDetailError');
+  const advanceBtn = document.getElementById('btnLiberacaoAdvance');
+  const rejectBtn = document.getElementById('btnLiberacaoReject');
+
+  passwordInput.value = '';
+  errorEl.classList.add('hidden');
+
+  if (card.status === 'Setor') {
+    passwordSection.classList.add('hidden');
+    advanceBtn.textContent = 'Transmitir';
+    advanceBtn.classList.remove('hidden');
+    rejectBtn.classList.add('hidden');
+  } else if (card.status === 'Encarregado' || card.status === 'Imediato') {
+    passwordSection.classList.remove('hidden');
+    advanceBtn.textContent = 'Aprovado';
+    advanceBtn.classList.remove('hidden');
+    rejectBtn.classList.remove('hidden');
+  } else {
+    passwordSection.classList.add('hidden');
+    advanceBtn.classList.add('hidden');
+    rejectBtn.classList.add('hidden');
+  }
+
+  document.getElementById('liberacaoCardDetailModal').classList.remove('hidden');
+}
+
+function closeLiberacaoCardDetail() {
+  document.getElementById('liberacaoCardDetailModal').classList.add('hidden');
+  currentLiberacaoCardId = null;
+}
+
+async function handleLiberacaoAdvance() {
+  const card = liberacaoCards.find(c => c.id === currentLiberacaoCardId);
+  if (!card) return;
+
+  const errorEl = document.getElementById('liberacaoDetailError');
+  errorEl.classList.add('hidden');
+
+  let senha = '';
+  if (card.status === 'Encarregado' || card.status === 'Imediato') {
+    senha = document.getElementById('liberacaoActionPassword').value;
+    if (!senha) {
+      errorEl.textContent = 'Informe a senha de aprovação.';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+  }
+
+  showLoading(true);
+  try {
+    const response = await fetch(SCRIPT_URL, {
+      method: 'POST',
+      mode: 'cors',
+      headers: {
+        'Content-Type': 'text/plain',
+      },
+      body: JSON.stringify({ tipo: 'liberacao_avancar', id: card.id, senha: senha })
+    });
+
+    const resData = await response.json();
+    if (resData && resData.status === 'success') {
+      showToast("Documento avançou para a próxima etapa!", "success");
+      closeLiberacaoCardDetail();
+      await fetchLiberacaoCards();
+    } else {
+      throw new Error(resData.message || "Erro ao avançar o documento.");
+    }
+  } catch (error) {
+    console.error("Erro ao avançar card de liberação:", error);
+    errorEl.textContent = error.message || "Senha incorreta ou erro ao processar.";
+    errorEl.classList.remove('hidden');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function handleLiberacaoReject() {
+  const card = liberacaoCards.find(c => c.id === currentLiberacaoCardId);
+  if (!card) return;
+
+  showLoading(true);
+  try {
+    const response = await fetch(SCRIPT_URL, {
+      method: 'POST',
+      mode: 'cors',
+      headers: {
+        'Content-Type': 'text/plain',
+      },
+      body: JSON.stringify({ tipo: 'liberacao_recusar', id: card.id })
+    });
+
+    const resData = await response.json();
+    if (resData && resData.status === 'success') {
+      showToast("Documento recusado e devolvido para a etapa anterior.", "warning");
+      closeLiberacaoCardDetail();
+      await fetchLiberacaoCards();
+    } else {
+      throw new Error(resData.message || "Erro ao recusar o documento.");
+    }
+  } catch (error) {
+    console.error("Erro ao recusar card de liberação:", error);
+    showToast("Erro ao recusar o documento. Tente novamente.", "error");
+  } finally {
+    showLoading(false);
+  }
+}
+
 // --- UTILS DE ELEMENTOS DA UI ---
 
 function showLoading(show) {
@@ -2248,6 +2627,7 @@ function initEventListeners() {
   document.getElementById('menuRetirada').addEventListener('click', () => switchTab('retirada'));
   document.getElementById('menuEntrada').addEventListener('click', () => switchTab('entrada'));
   document.getElementById('menuEstoque').addEventListener('click', () => switchTab('estoque'));
+  document.getElementById('menuLiberacao').addEventListener('click', () => switchTab('liberacao'));
 
   // Listener do botão de Atualizar
   const btnRefresh = document.getElementById('btnRefresh');
@@ -2339,6 +2719,7 @@ function initApp() {
   initializeWithdrawalModule();
   initializeEntradaModule();
   initializeEstoqueModule();
+  initializeLiberacaoModule();
   initSidebarToggle();
   fetchDashboardData();
 }

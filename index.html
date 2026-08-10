@@ -155,6 +155,77 @@
     </div>
   </div>
 
+  <!-- Modal de Novo Documento para Liberação -->
+  <div id="newLiberacaoCardModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h2 class="modal-title">Novo Documento para Liberação</h2>
+      <p class="modal-subtitle">Selecione o setor, dê um título e anexe o documento a ser tramitado.</p>
+
+      <div class="filter-group" style="margin-bottom: 1rem;">
+        <label for="newCardSetor">Setor</label>
+        <select id="newCardSetor">
+          <option value="">Selecione o setor...</option>
+        </select>
+      </div>
+
+      <div class="filter-group" style="margin-bottom: 1rem;">
+        <label for="newCardTitulo">Título do Documento</label>
+        <input type="text" id="newCardTitulo" placeholder="Ex: Solicitação de compra de material">
+      </div>
+
+      <div class="filter-group" style="margin-bottom: 1rem;">
+        <label for="newCardDescricao">Descrição (opcional)</label>
+        <textarea id="newCardDescricao" rows="3" placeholder="Detalhes adicionais..."></textarea>
+      </div>
+
+      <div class="filter-group">
+        <label for="newCardFile">Documento (PDF, imagem ou Word — até 8MB)</label>
+        <input type="file" id="newCardFile" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png">
+      </div>
+
+      <p id="newCardError" class="modal-error-text hidden"></p>
+
+      <div class="form-actions" style="margin-top: 1.5rem;">
+        <button id="btnCancelNewLiberacaoCard" class="btn btn-secondary">Cancelar</button>
+        <button id="btnConfirmNewLiberacaoCard" class="btn btn-submit">Criar Card</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de Detalhes do Card de Liberação -->
+  <div id="liberacaoCardDetailModal" class="modal-overlay hidden">
+    <div class="modal-card modal-card--wide">
+      <h2 class="modal-title" id="liberacaoDetailTitulo">Título do Documento</h2>
+      <p class="modal-subtitle">
+        Setor: <strong id="liberacaoDetailSetor"></strong> · Etapa atual: <strong id="liberacaoDetailStatus"></strong>
+      </p>
+
+      <p id="liberacaoDetailDescricao" style="font-size: 0.875rem; color: var(--text-secondary); margin-bottom: 1.25rem; line-height: 1.5;"></p>
+
+      <a id="liberacaoDetailFileLink" href="#" target="_blank" rel="noopener" class="btn btn-secondary liberacao-file-link hidden">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+        </svg>
+        <span id="liberacaoDetailFileName">Abrir Documento</span>
+      </a>
+
+      <div id="liberacaoDetailTimeline" class="liberacao-timeline"></div>
+
+      <div id="liberacaoDetailPasswordSection" class="filter-group hidden" style="margin-top: 1rem;">
+        <label for="liberacaoActionPassword">Senha de Aprovação</label>
+        <input type="password" id="liberacaoActionPassword" placeholder="Digite a senha...">
+      </div>
+
+      <p id="liberacaoDetailError" class="modal-error-text hidden"></p>
+
+      <div class="form-actions" style="margin-top: 1.5rem;">
+        <button id="btnLiberacaoReject" class="btn btn-secondary hidden">Recusar</button>
+        <button id="btnCloseLiberacaoDetail" class="btn btn-secondary">Fechar</button>
+        <button id="btnLiberacaoAdvance" class="btn btn-submit hidden">Ação</button>
+      </div>
+    </div>
+  </div>
+
   <div class="app-layout">
     
     <!-- Menu Lateral (Sidebar) -->
@@ -206,6 +277,14 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"></path>
             </svg>
             <span class="menu-link-text">Estoque</span>
+          </a>
+        </li>
+        <li class="menu-item">
+          <a id="menuLiberacao" class="menu-link" title="Liberação">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path>
+            </svg>
+            <span class="menu-link-text">Liberação</span>
           </a>
         </li>
       </nav>
@@ -719,6 +798,56 @@
             </div>
           </section>
         </section>
+      </main>
+
+      <!-- ABA 5: LIBERAÇÃO DE DOCUMENTOS (KANBAN) -->
+      <main id="viewLiberacao" class="view-content container hidden">
+        <header style="margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+          <div class="header-title-container">
+            <h1>Liberação de Documentos</h1>
+            <p>Fluxo de aprovação: Setor → Encarregado → Imediato → Liberados</p>
+          </div>
+          <button id="btnNewLiberacaoCard" class="btn-refresh">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+            </svg>
+            Novo Documento
+          </button>
+        </header>
+
+        <div class="kanban-board">
+          <div class="kanban-column">
+            <div class="kanban-column-header">
+              <span>Setor</span>
+              <span class="kanban-column-count" id="kanbanCountSetor">0</span>
+            </div>
+            <div class="kanban-column-body" id="kanbanColumnSetor"></div>
+          </div>
+
+          <div class="kanban-column">
+            <div class="kanban-column-header">
+              <span>Encarregado</span>
+              <span class="kanban-column-count" id="kanbanCountEncarregado">0</span>
+            </div>
+            <div class="kanban-column-body" id="kanbanColumnEncarregado"></div>
+          </div>
+
+          <div class="kanban-column">
+            <div class="kanban-column-header">
+              <span>Imediato</span>
+              <span class="kanban-column-count" id="kanbanCountImediato">0</span>
+            </div>
+            <div class="kanban-column-body" id="kanbanColumnImediato"></div>
+          </div>
+
+          <div class="kanban-column">
+            <div class="kanban-column-header">
+              <span>Liberados</span>
+              <span class="kanban-column-count" id="kanbanCountLiberados">0</span>
+            </div>
+            <div class="kanban-column-body" id="kanbanColumnLiberados"></div>
+          </div>
+        </div>
       </main>
 
     </div>
