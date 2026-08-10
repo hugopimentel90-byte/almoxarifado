@@ -1713,6 +1713,14 @@ tr:hover td { background-color: var(--bg-primary); }
   transform: translateY(-1px);
 }
 
+.kanban-card-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
 .kanban-card-sector {
   display: inline-block;
   font-size: 0.6875rem;
@@ -1723,7 +1731,31 @@ tr:hover td { background-color: var(--bg-primary); }
   background-color: var(--color-primary-light);
   padding: 0.15rem 0.5rem;
   border-radius: var(--radius-sm);
-  margin-bottom: 0.5rem;
+}
+
+.kanban-card-delete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: var(--transition);
+}
+
+.kanban-card-delete:hover {
+  color: var(--color-danger);
+  background-color: var(--color-danger-light);
+}
+
+.kanban-card-delete svg {
+  width: 15px;
+  height: 15px;
 }
 
 .kanban-card-title {

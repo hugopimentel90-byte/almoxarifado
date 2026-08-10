@@ -2270,8 +2270,20 @@ function renderLiberacaoBoard() {
 function createLiberacaoCardElement(card) {
   const el = document.createElement('div');
   el.className = 'kanban-card';
+
+  const canDelete = card.status === 'Setor';
+
   el.innerHTML = `
-    <span class="kanban-card-sector">${card.setor}</span>
+    <div class="kanban-card-top-row">
+      <span class="kanban-card-sector">${card.setor}</span>
+      ${canDelete ? `
+        <button type="button" class="kanban-card-delete" title="Excluir documento">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+          </svg>
+        </button>
+      ` : ''}
+    </div>
     <div class="kanban-card-title" title="${card.titulo}">${card.titulo}</div>
     <div class="kanban-card-meta">
       <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
@@ -2280,8 +2292,51 @@ function createLiberacaoCardElement(card) {
       <span>${card.nomeArquivo || 'Sem anexo'}</span>
     </div>
   `;
+
+  if (canDelete) {
+    el.querySelector('.kanban-card-delete').addEventListener('click', (e) => {
+      e.stopPropagation();
+      handleDeleteLiberacaoCard(card.id, card.titulo);
+    });
+  }
+
   el.addEventListener('click', () => openLiberacaoCardDetail(card.id));
   return el;
+}
+
+async function handleDeleteLiberacaoCard(id, titulo) {
+  const confirmed = window.confirm(`Excluir o documento "${titulo}"? Essa ação não pode ser desfeita.`);
+  if (!confirmed) return;
+
+  if (!SCRIPT_URL || SCRIPT_URL.trim() === "") {
+    showToast("Configure a SCRIPT_URL para excluir o documento.", "warning");
+    return;
+  }
+
+  showLoading(true);
+  try {
+    const response = await fetch(SCRIPT_URL, {
+      method: 'POST',
+      mode: 'cors',
+      headers: {
+        'Content-Type': 'text/plain',
+      },
+      body: JSON.stringify({ tipo: 'liberacao_excluir', id: id })
+    });
+
+    const resData = await response.json();
+    if (resData && resData.status === 'success') {
+      showToast("Documento excluído.", "success");
+      await fetchLiberacaoCards();
+    } else {
+      throw new Error(resData.message || "Erro ao excluir o documento.");
+    }
+  } catch (error) {
+    console.error("Erro ao excluir card de liberação:", error);
+    showToast("Erro ao excluir o documento. Tente novamente.", "error");
+  } finally {
+    showLoading(false);
+  }
 }
 
 function populateLiberacaoSectorSelect() {

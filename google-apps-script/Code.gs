@@ -92,9 +92,18 @@ const LIBERACAO_IMEDIATO_PASSWORD = "imediato321";
  * documentos da aba "Liberação". Sem rodar isso uma vez, chamadas feitas de
  * fora (pelo site) falham com erro de permissão, pois o Apps Script não
  * consegue abrir a tela de autorização sozinho quando é chamado via HTTP.
+ *
+ * Importante: esta função exercita as MESMAS operações de leitura E escrita
+ * que o app realmente usa (criar pasta, criar arquivo, compartilhar, apagar),
+ * pra garantir que a tela de autorização peça o escopo completo do Drive
+ * (não só leitura).
  */
 function autorizarAcessoAoDrive() {
-  DriveApp.getRootFolder();
+  const folder = getOrCreateLiberacaoFolder();
+  const testBlob = Utilities.newBlob("teste de autorização", "text/plain", "teste-autorizacao.txt");
+  const testFile = folder.createFile(testBlob);
+  testFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  testFile.setTrashed(true);
 }
 
 function doPost(e) {
@@ -116,6 +125,8 @@ function doPost(e) {
       response = { card: handleLiberacaoAvancar(ss, payload) };
     } else if (tipo === "liberacao_recusar") {
       response = { card: handleLiberacaoRecusar(ss, payload) };
+    } else if (tipo === "liberacao_excluir") {
+      response = { deleted: handleLiberacaoExcluir(ss, payload) };
     } else {
       response = { count: handleRetiradaMaterial(ss, normalizeItemsPayload(payload)) };
     }
@@ -688,6 +699,57 @@ function handleLiberacaoRecusar(ss, payload) {
   } finally {
     lock.releaseLock();
   }
+}
+
+/**
+ * Exclui um card, mas apenas se ele ainda estiver na coluna "Setor" (antes de
+ * ser transmitido para aprovação). Também move o arquivo anexado, se houver,
+ * para a lixeira do Google Drive.
+ */
+function handleLiberacaoExcluir(ss, payload) {
+  const sheet = getOrCreateLiberacaoSheet(ss);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+
+  try {
+    const id = payload.id;
+    if (!id) throw new Error("ID do card não informado.");
+
+    const rowIndex = findLiberacaoRowById(sheet, id);
+    if (rowIndex === -1) throw new Error("Card não encontrado.");
+
+    const status = sheet.getRange(rowIndex, 7).getValue();
+    if (status !== "Setor") {
+      throw new Error("Só é possível excluir documentos que ainda estão na coluna Setor.");
+    }
+
+    const urlArquivo = sheet.getRange(rowIndex, 6).getValue();
+    if (urlArquivo) {
+      try {
+        const fileId = getDriveFileIdFromUrl(urlArquivo);
+        if (fileId) {
+          DriveApp.getFileById(fileId).setTrashed(true);
+        }
+      } catch (e) {
+        // Se não conseguir apagar o arquivo do Drive, segue removendo a linha mesmo assim.
+      }
+    }
+
+    sheet.deleteRow(rowIndex);
+    return true;
+
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Extrai o ID de um arquivo do Google Drive a partir da URL gerada por
+ * file.getUrl().
+ */
+function getDriveFileIdFromUrl(url) {
+  const match = String(url).match(/[-\w]{25,}/);
+  return match ? match[0] : null;
 }
 
 /**
