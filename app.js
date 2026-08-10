@@ -2,7 +2,7 @@
 const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTwMkf7LbwKuzddFgZCu0aFeV5rhA9DgRiIMGfG9oGFo6DcLKRDZoscpMzHELn0rmrqvCbq_SMPJzn2/pub?gid=0&single=true&output=csv";
 
 // URL do Web App do Google Apps Script para salvar retiradas diretamente na planilha
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxEoyguK7MWwKmlboAuVeYYG_syL4j1e4sx0KWZ9TzilxjRHc494-kqiyJYHhjScOnh/exec";
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw2kh2TjukkucopLdLQTINnFdYrUGEns2UonGz8tt7g4KkxakUt0TBXYXQBeML59G39/exec";
 
 // Chave para armazenamento de retiradas locais
 const LOCAL_STORAGE_KEY = "almoxarifado_retiradas_locais";

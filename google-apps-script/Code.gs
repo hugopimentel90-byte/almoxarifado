@@ -84,6 +84,19 @@ const LIBERACAO_DRIVE_FOLDER_NAME = "Almoxarifado - Documentos de Liberação";
 const LIBERACAO_ENCARREGADO_PASSWORD = "encarregado321";
 const LIBERACAO_IMEDIATO_PASSWORD = "imediato321";
 
+/**
+ * SÓ PRECISA RODAR UMA VEZ, MANUALMENTE, PELO EDITOR DO APPS SCRIPT.
+ * Selecione esta função no menu suspenso ao lado do botão "Executar" (▶) e
+ * clique em Executar. Isso abre a tela de autorização e concede ao script a
+ * permissão de acessar o Google Drive, necessária para o upload de
+ * documentos da aba "Liberação". Sem rodar isso uma vez, chamadas feitas de
+ * fora (pelo site) falham com erro de permissão, pois o Apps Script não
+ * consegue abrir a tela de autorização sozinho quando é chamado via HTTP.
+ */
+function autorizarAcessoAoDrive() {
+  DriveApp.getRootFolder();
+}
+
 function doPost(e) {
   try {
     if (!e || !e.postData || !e.postData.contents) {
