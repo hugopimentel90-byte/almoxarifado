@@ -2339,21 +2339,7 @@ async function handleDeleteLiberacaoCard(id, titulo) {
   }
 }
 
-function populateLiberacaoSectorSelect() {
-  const select = document.getElementById('newCardSetor');
-  select.innerHTML = '<option value="">Selecione o setor...</option>';
-
-  const uniqueSectors = [...new Set(rawData.map(item => item.setor))].sort();
-  uniqueSectors.forEach(s => {
-    const opt = document.createElement('option');
-    opt.value = s;
-    opt.textContent = s;
-    select.appendChild(opt);
-  });
-}
-
 function openNewLiberacaoCardModal() {
-  populateLiberacaoSectorSelect();
   document.getElementById('newCardSetor').value = '';
   document.getElementById('newCardTitulo').value = '';
   document.getElementById('newCardDescricao').value = '';
