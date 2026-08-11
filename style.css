@@ -388,6 +388,44 @@ body.sidebar-collapsed .menu-link {
   flex-shrink: 0;
 }
 
+.sidebar-footer {
+  padding: 0.75rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.sidebar-logout-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background: none;
+  border: none;
+  color: var(--sidebar-text);
+  font-family: var(--font-family);
+  font-size: 0.875rem;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.sidebar-logout-btn:hover {
+  background-color: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+}
+
+.sidebar-logout-btn svg {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+body.sidebar-collapsed .sidebar-logout-btn {
+  justify-content: center;
+  padding: 0.75rem 0.5rem;
+}
+
 /* Área de Conteúdo Principal */
 .main-content-wrapper {
   flex-grow: 1;

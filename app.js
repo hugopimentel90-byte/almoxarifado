@@ -3105,6 +3105,9 @@ function initEventListeners() {
   document.getElementById('menuEstoque').addEventListener('click', () => switchTab('estoque'));
   document.getElementById('menuLiberacao').addEventListener('click', () => switchTab('liberacao'));
 
+  // Botão de Sair: revoga o acesso liberado neste navegador e volta para a tela de senha
+  document.getElementById('btnLogout').addEventListener('click', handleLogout);
+
   // Listener do botão de Atualizar
   const btnRefresh = document.getElementById('btnRefresh');
   if (btnRefresh) {
@@ -3223,6 +3226,17 @@ function applyRoleRestrictions() {
   if (qtyHeader) {
     qtyHeader.textContent = isVisitor ? 'Status' : 'Quantidade em Estoque';
   }
+}
+
+/**
+ * Revoga o acesso liberado neste navegador (remove a flag e o papel salvos)
+ * e recarrega a página, o que faz initAccessGate() mostrar a tela de senha
+ * novamente do zero.
+ */
+function handleLogout() {
+  localStorage.removeItem(ACCESS_GATE_GRANTED_KEY);
+  localStorage.removeItem(ACCESS_GATE_ROLE_KEY);
+  window.location.reload();
 }
 
 // --- INICIALIZAÇÃO ---
