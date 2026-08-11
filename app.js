@@ -18,6 +18,10 @@ let rawData = [];
 let currentFilteredData = [];
 let chartInstances = {};
 
+// Papel do usuário logado nesta sessão: 'admin' (acesso completo) ou 'visitante'
+// (consulta de estoque + anexo de documentos na Liberação). Definido em initAccessGate().
+let currentUserRole = 'admin';
+
 // Estado da Aba de Retirada
 let selectedCategory = "";
 let uniqueProductNamesForCategory = [];
@@ -292,6 +296,12 @@ async function fetchDashboardData() {
 // --- INTERFACE DE NAVEGAÇÃO E NAVEGAÇÃO ---
 
 function switchTab(tabName) {
+  // Reforço de segurança: visitante não tem acesso às abas de Retirada e Entrada,
+  // mesmo que algo tente disparar switchTab diretamente para elas.
+  if (currentUserRole === 'visitante' && (tabName === 'retirada' || tabName === 'entrada')) {
+    tabName = 'dashboard';
+  }
+
   const menuDashboard = document.getElementById('menuDashboard');
   const menuRetirada = document.getElementById('menuRetirada');
   const menuEntrada = document.getElementById('menuEntrada');
@@ -2346,10 +2356,15 @@ function renderEstoqueTable() {
 
   items.forEach(item => {
     const tr = document.createElement('tr');
+    const qtyCellHtml = currentUserRole === 'visitante'
+      ? (Number(item.total) > 0
+          ? '<span class="badge badge-success">Disponível</span>'
+          : '<span class="badge badge-danger">Esgotado</span>')
+      : formatDataLabelValue(item.total);
     tr.innerHTML = `
       <td style="font-weight: 600; color: var(--text-primary);">${item.produto}</td>
       <td style="color: var(--text-secondary);">${item.un}</td>
-      <td style="font-weight: 500;">${formatDataLabelValue(item.total)}</td>
+      <td style="font-weight: 500;">${qtyCellHtml}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -3120,8 +3135,10 @@ function initEventListeners() {
 
 // --- TELA DE ACESSO (SENHA) ---
 
-const ACCESS_GATE_PASSWORD = "diretoria321";
+const ACCESS_GATE_PASSWORD = "diretoria321"; // acesso completo (admin)
+const ACCESS_GATE_VISITOR_PASSWORD = "visitante321"; // acesso restrito (visitante)
 const ACCESS_GATE_GRANTED_KEY = "almoxarifado_access_granted";
+const ACCESS_GATE_ROLE_KEY = "almoxarifado_access_role";
 
 function initAccessGate() {
   const gate = document.getElementById('accessGateScreen');
@@ -3133,15 +3150,26 @@ function initAccessGate() {
 
   // Se o acesso já foi liberado antes neste navegador, pula direto para o app.
   if (localStorage.getItem(ACCESS_GATE_GRANTED_KEY) === '1') {
+    currentUserRole = localStorage.getItem(ACCESS_GATE_ROLE_KEY) || 'admin';
     gate.remove();
     initApp();
     return;
   }
 
   function attemptAccess() {
-    if (passwordInput.value === ACCESS_GATE_PASSWORD) {
+    const typedPassword = passwordInput.value;
+    let role = null;
+    if (typedPassword === ACCESS_GATE_PASSWORD) {
+      role = 'admin';
+    } else if (typedPassword === ACCESS_GATE_VISITOR_PASSWORD) {
+      role = 'visitante';
+    }
+
+    if (role) {
       errorMsg.classList.add('hidden');
+      currentUserRole = role;
       localStorage.setItem(ACCESS_GATE_GRANTED_KEY, '1');
+      localStorage.setItem(ACCESS_GATE_ROLE_KEY, role);
       gate.classList.add('access-gate-unlocked');
       setTimeout(() => gate.remove(), 400);
       initApp();
@@ -3173,9 +3201,34 @@ function initAccessGate() {
   passwordInput.focus();
 }
 
+/**
+ * Aplica as restrições de visualização do papel "visitante": some com as
+ * abas de Retirada e Entrada no menu lateral, esconde o painel de Consumo
+ * Limite por Setor no Dashboard, e troca o cabeçalho da coluna de
+ * quantidade na Consulta de Estoque (a própria renderEstoqueTable troca o
+ * valor de cada linha por um status Disponível/Esgotado).
+ */
+function applyRoleRestrictions() {
+  const isVisitor = currentUserRole === 'visitante';
+
+  document.getElementById('menuRetirada').closest('li').classList.toggle('hidden', isVisitor);
+  document.getElementById('menuEntrada').closest('li').classList.toggle('hidden', isVisitor);
+
+  const consumoSection = document.getElementById('consumoLimiteSetorSection');
+  if (consumoSection) {
+    consumoSection.classList.toggle('hidden', isVisitor);
+  }
+
+  const qtyHeader = document.getElementById('estoqueQuantityHeader');
+  if (qtyHeader) {
+    qtyHeader.textContent = isVisitor ? 'Status' : 'Quantidade em Estoque';
+  }
+}
+
 // --- INICIALIZAÇÃO ---
 
 function initApp() {
+  applyRoleRestrictions();
   initEventListeners();
   initializeWithdrawalModule();
   initializeEntradaModule();

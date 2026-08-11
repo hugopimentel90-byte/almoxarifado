@@ -799,6 +799,7 @@ tr:hover td { background-color: var(--bg-primary); }
 
 .badge-success { background-color: var(--color-success-light); color: var(--color-success); }
 .badge-pending { background-color: var(--color-warning-light); color: var(--color-warning); }
+.badge-danger { background-color: var(--color-danger-light); color: var(--color-danger); }
 
 .table-footer {
   padding: 1rem 1.5rem;
