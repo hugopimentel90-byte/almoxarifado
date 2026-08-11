@@ -12,6 +12,8 @@
   <!-- jsPDF + AutoTable para exportação de relatórios em PDF -->
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
+  <!-- PDF.js para extrair texto (Produto/Quantidade) dos documentos de Liberação -->
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
 </head>
 <body>
 
@@ -214,6 +216,14 @@
       </a>
 
       <div id="liberacaoDetailTimeline" class="liberacao-timeline"></div>
+
+      <div id="liberacaoItemsSection" class="liberacao-items-section hidden">
+        <div class="liberacao-items-header">
+          <span>Itens do Documento</span>
+          <button type="button" id="btnAddLiberacaoItem" class="btn-add-liberacao-item hidden">+ Adicionar item</button>
+        </div>
+        <div id="liberacaoItemsList" class="liberacao-items-list"></div>
+      </div>
 
       <div id="liberacaoDetailPasswordSection" class="filter-group hidden" style="margin-top: 1rem;">
         <label for="liberacaoActionPassword">Senha de Aprovação</label>

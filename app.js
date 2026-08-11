@@ -45,6 +45,7 @@ let estoqueSearchQuery = "";
 const LIBERACAO_COLUMNS = ['Setor', 'Encarregado', 'Imediato', 'Liberados'];
 let liberacaoCards = [];
 let currentLiberacaoCardId = null;
+let currentLiberacaoItems = []; // Itens (Produto/Quantidade) do card aberto no momento, editável só na etapa Encarregado
 
 // Lista de colunas obrigatórias
 const REQUIRED_HEADERS = ['produto', 'qtd', 'un', 'data', 'setor', 'pedido', 'mes', 'categoria', 'precomedio'];
@@ -2198,6 +2199,7 @@ function initializeLiberacaoModule() {
   document.getElementById('btnCloseLiberacaoDetail').addEventListener('click', closeLiberacaoCardDetail);
   document.getElementById('btnLiberacaoAdvance').addEventListener('click', handleLiberacaoAdvance);
   document.getElementById('btnLiberacaoReject').addEventListener('click', handleLiberacaoReject);
+  document.getElementById('btnAddLiberacaoItem').addEventListener('click', handleAddLiberacaoItem);
   document.getElementById('liberacaoCardDetailModal').addEventListener('click', (e) => {
     if (e.target.id === 'liberacaoCardDetailModal') {
       closeLiberacaoCardDetail();
@@ -2361,6 +2363,72 @@ function readFileAsBase64(file) {
   });
 }
 
+/**
+ * Extrai pares Produto/Quantidade de um PDF, lendo o texto com posição
+ * (x, y) via PDF.js, agrupando em linhas visuais (mesma altura) e tratando
+ * como item de tabela qualquer linha que termine em um número — assim não
+ * depende do texto exato dos cabeçalhos, só do formato "produto ... qtd"
+ * (o último cara da linha e a quantidade).
+ */
+async function extractProductQuantityFromPdf(file) {
+  try {
+    if (!window.pdfjsLib) return [];
+    if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+    }
+
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+    const rawItems = [];
+    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+      const page = await pdf.getPage(pageNum);
+      const textContent = await page.getTextContent();
+      textContent.items.forEach(item => {
+        const str = (item.str || '').trim();
+        if (!str) return;
+        rawItems.push({ str, x: item.transform[4], y: item.transform[5] });
+      });
+    }
+
+    // Agrupa por linha visual (mesma altura Y, com tolerância)
+    const lineTolerance = 3;
+    const lines = [];
+    rawItems
+      .sort((a, b) => b.y - a.y || a.x - b.x)
+      .forEach(item => {
+        let line = lines.find(l => Math.abs(l.y - item.y) <= lineTolerance);
+        if (!line) {
+          line = { y: item.y, items: [] };
+          lines.push(line);
+        }
+        line.items.push(item);
+      });
+
+    const parsedItems = [];
+    lines.forEach(line => {
+      line.items.sort((a, b) => a.x - b.x);
+      const lineText = line.items.map(i => i.str).join(' ').replace(/\s+/g, ' ').trim();
+
+      // Considera "item de tabela" toda linha que termina em um número —
+      // funciona independente do texto exato dos cabeçalhos da tabela.
+      const match = lineText.match(/^(.+?)\s+(\d{1,5})$/);
+      if (match) {
+        const produto = match[1].trim();
+        const qtd = parseInt(match[2], 10);
+        if (produto && qtd > 0) {
+          parsedItems.push({ produto, qtd });
+        }
+      }
+    });
+
+    return parsedItems;
+  } catch (error) {
+    console.error("Erro ao extrair itens do PDF:", error);
+    return [];
+  }
+}
+
 async function handleCreateLiberacaoCard() {
   const setor = document.getElementById('newCardSetor').value;
   const titulo = document.getElementById('newCardTitulo').value.trim();
@@ -2399,6 +2467,11 @@ async function handleCreateLiberacaoCard() {
   try {
     const base64 = await readFileAsBase64(file);
 
+    // Se for um PDF, tenta extrair automaticamente os pares Produto/Quantidade
+    // pra já deixar prontos pra revisão do Encarregado.
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    const itens = isPdf ? await extractProductQuantityFromPdf(file) : [];
+
     const response = await fetch(SCRIPT_URL, {
       method: 'POST',
       mode: 'cors',
@@ -2410,6 +2483,7 @@ async function handleCreateLiberacaoCard() {
         setor: setor,
         titulo: titulo,
         descricao: descricao,
+        itens: itens,
         arquivo: {
           nome: file.name,
           mimeType: file.type || 'application/octet-stream',
@@ -2506,12 +2580,150 @@ function openLiberacaoCardDetail(id) {
     rejectBtn.classList.add('hidden');
   }
 
+  renderLiberacaoItemsSection(card);
+
   document.getElementById('liberacaoCardDetailModal').classList.remove('hidden');
 }
 
 function closeLiberacaoCardDetail() {
   document.getElementById('liberacaoCardDetailModal').classList.add('hidden');
   currentLiberacaoCardId = null;
+  currentLiberacaoItems = [];
+}
+
+/**
+ * Mostra a lista de Produto/Quantidade extraída do documento, apenas nas
+ * etapas Encarregado (editável) e Imediato (somente visualização, mostrando
+ * o que o Encarregado alterou ou manteve).
+ */
+function renderLiberacaoItemsSection(card) {
+  const section = document.getElementById('liberacaoItemsSection');
+  const addBtn = document.getElementById('btnAddLiberacaoItem');
+
+  if (card.status !== 'Encarregado' && card.status !== 'Imediato') {
+    section.classList.add('hidden');
+    currentLiberacaoItems = [];
+    return;
+  }
+
+  section.classList.remove('hidden');
+
+  const editable = card.status === 'Encarregado';
+  addBtn.classList.toggle('hidden', !editable);
+
+  currentLiberacaoItems = (card.itens || []).map(item => ({ produto: item.produto, qtd: item.qtd }));
+  renderLiberacaoItemsList(editable);
+}
+
+function renderLiberacaoItemsList(editable) {
+  const listContainer = document.getElementById('liberacaoItemsList');
+  listContainer.innerHTML = '';
+
+  if (currentLiberacaoItems.length === 0) {
+    listContainer.innerHTML = `<div class="kanban-column-empty">Nenhum item identificado automaticamente${editable ? ' — adicione manualmente se necessário' : ''}</div>`;
+    return;
+  }
+
+  currentLiberacaoItems.forEach((item, index) => {
+    listContainer.appendChild(createLiberacaoItemRow(item, index, editable));
+  });
+}
+
+function createLiberacaoItemRow(item, index, editable) {
+  const row = document.createElement('div');
+  row.className = editable ? 'liberacao-item-row' : 'liberacao-item-row liberacao-item-row--readonly';
+
+  const nameEl = document.createElement('div');
+  nameEl.className = 'selected-item-name';
+  nameEl.textContent = item.produto;
+  nameEl.title = item.produto;
+  row.appendChild(nameEl);
+
+  if (editable) {
+    const qtyControl = document.createElement('div');
+    qtyControl.className = 'quantity-control';
+
+    const btnMinus = document.createElement('button');
+    btnMinus.type = 'button';
+    btnMinus.className = 'quantity-btn';
+    btnMinus.textContent = '−';
+    btnMinus.onclick = () => {
+      const input = qtyControl.querySelector('input');
+      let val = parseInt(input.value, 10) || 1;
+      if (val > 1) {
+        val--;
+        input.value = val;
+        currentLiberacaoItems[index].qtd = val;
+      }
+    };
+
+    const inputQty = document.createElement('input');
+    inputQty.type = 'number';
+    inputQty.className = 'quantity-input';
+    inputQty.value = item.qtd;
+    inputQty.min = 1;
+    inputQty.onchange = (e) => {
+      let val = parseInt(e.target.value, 10);
+      if (isNaN(val) || val < 1) val = 1;
+      e.target.value = val;
+      currentLiberacaoItems[index].qtd = val;
+    };
+
+    const btnPlus = document.createElement('button');
+    btnPlus.type = 'button';
+    btnPlus.className = 'quantity-btn';
+    btnPlus.textContent = '+';
+    btnPlus.onclick = () => {
+      const input = qtyControl.querySelector('input');
+      let val = parseInt(input.value, 10) || 1;
+      val++;
+      input.value = val;
+      currentLiberacaoItems[index].qtd = val;
+    };
+
+    qtyControl.appendChild(btnMinus);
+    qtyControl.appendChild(inputQty);
+    qtyControl.appendChild(btnPlus);
+    row.appendChild(qtyControl);
+
+    const btnDelete = document.createElement('button');
+    btnDelete.type = 'button';
+    btnDelete.className = 'selected-item-delete-btn';
+    btnDelete.title = 'Remover item';
+    btnDelete.innerHTML = `
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+      </svg>
+    `;
+    btnDelete.addEventListener('click', () => {
+      currentLiberacaoItems.splice(index, 1);
+      renderLiberacaoItemsList(true);
+    });
+    row.appendChild(btnDelete);
+
+  } else {
+    const qtyEl = document.createElement('div');
+    qtyEl.className = 'liberacao-item-qty-readonly';
+    qtyEl.textContent = item.qtd;
+    row.appendChild(qtyEl);
+  }
+
+  return row;
+}
+
+function handleAddLiberacaoItem() {
+  const nome = window.prompt('Nome do produto:');
+  if (!nome || !nome.trim()) return;
+
+  const qtdStr = window.prompt('Quantidade:', '1');
+  const qtd = parseInt(qtdStr, 10);
+  if (!qtd || qtd <= 0) {
+    showToast("Quantidade inválida.", "error");
+    return;
+  }
+
+  currentLiberacaoItems.push({ produto: nome.trim(), qtd: qtd });
+  renderLiberacaoItemsList(true);
 }
 
 async function handleLiberacaoAdvance() {
@@ -2539,7 +2751,7 @@ async function handleLiberacaoAdvance() {
       headers: {
         'Content-Type': 'text/plain',
       },
-      body: JSON.stringify({ tipo: 'liberacao_avancar', id: card.id, senha: senha })
+      body: JSON.stringify({ tipo: 'liberacao_avancar', id: card.id, senha: senha, itens: currentLiberacaoItems })
     });
 
     const resData = await response.json();

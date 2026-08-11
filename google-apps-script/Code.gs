@@ -54,6 +54,11 @@
  *   J - Aprovado pelo Encarregado em
  *   K - Aprovado pelo Imediato em (= liberado em)
  *   L - Última ação (ex: registro de uma recusa)
+ *   M - Itens (JSON): lista [{produto, qtd}, ...] extraída automaticamente
+ *       do PDF no momento do upload (heurística: qualquer linha do PDF que
+ *       termine em número é tratada como um item de tabela). Editável pelo
+ *       Encarregado (aumentar/diminuir quantidade, excluir item) — a versão
+ *       revisada substitui esta coluna ao aprovar; o Imediato só visualiza.
  *
  *   O documento anexado é salvo no Google Drive (pasta "Almoxarifado -
  *   Documentos de Liberação"), compartilhado como "qualquer pessoa com o
@@ -509,7 +514,7 @@ function getOrCreateLiberacaoSheet(ss) {
     sheet.appendRow([
       "ID", "Setor", "Titulo", "Descricao", "NomeArquivo", "UrlArquivo",
       "Status", "CriadoEm", "TransmitidoEm", "AprovadoEncarregadoEm",
-      "AprovadoImediatoEm", "UltimaAcao"
+      "AprovadoImediatoEm", "UltimaAcao", "ItensJSON"
     ]);
   }
   return sheet;
@@ -561,8 +566,22 @@ function liberacaoRowToCard(row) {
     transmitidoEm: row[8],
     aprovadoEncarregadoEm: row[9],
     aprovadoImediatoEm: row[10],
-    ultimaAcao: row[11]
+    ultimaAcao: row[11],
+    itens: parseLiberacaoItens(row[12])
   };
+}
+
+/**
+ * Faz o parse seguro da coluna ItensJSON (lista [{produto, qtd}, ...]).
+ */
+function parseLiberacaoItens(value) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    return [];
+  }
 }
 
 /**
@@ -601,8 +620,9 @@ function handleLiberacaoCriar(ss, payload) {
 
     const id = "LIB-" + new Date().getTime();
     const nowStr = formatLiberacaoTimestamp(new Date());
+    const itensJSON = JSON.stringify(payload.itens || []);
 
-    const row = [id, setor, titulo, descricao, nomeArquivo, urlArquivo, "Setor", nowStr, "", "", "", ""];
+    const row = [id, setor, titulo, descricao, nomeArquivo, urlArquivo, "Setor", nowStr, "", "", "", "", itensJSON];
     sheet.appendRow(row);
 
     return liberacaoRowToCard(row);
@@ -641,6 +661,9 @@ function handleLiberacaoAvancar(ss, payload) {
       }
       sheet.getRange(rowIndex, 7).setValue("Imediato");
       sheet.getRange(rowIndex, 10).setValue(nowStr); // J - AprovadoEncarregadoEm
+      if (payload.itens) {
+        sheet.getRange(rowIndex, 13).setValue(JSON.stringify(payload.itens)); // M - ItensJSON
+      }
     } else if (status === "Imediato") {
       if (payload.senha !== LIBERACAO_IMEDIATO_PASSWORD) {
         throw new Error("Senha do Imediato incorreta.");
@@ -651,7 +674,7 @@ function handleLiberacaoAvancar(ss, payload) {
       throw new Error("Este documento já está liberado e não pode avançar mais.");
     }
 
-    const updatedRow = sheet.getRange(rowIndex, 1, 1, 12).getValues()[0];
+    const updatedRow = sheet.getRange(rowIndex, 1, 1, 13).getValues()[0];
     return liberacaoRowToCard(updatedRow);
 
   } finally {
@@ -693,7 +716,7 @@ function handleLiberacaoRecusar(ss, payload) {
     sheet.getRange(rowIndex, 7).setValue(novoStatus);
     sheet.getRange(rowIndex, 12).setValue("Recusado pelo " + etapa + " em " + nowStr); // L - UltimaAcao
 
-    const updatedRow = sheet.getRange(rowIndex, 1, 1, 12).getValues()[0];
+    const updatedRow = sheet.getRange(rowIndex, 1, 1, 13).getValues()[0];
     return liberacaoRowToCard(updatedRow);
 
   } finally {
@@ -762,7 +785,7 @@ function getLiberacaoCards() {
   const cards = [];
 
   if (lastRow >= 2) {
-    const values = sheet.getRange(2, 1, lastRow - 1, 12).getValues();
+    const values = sheet.getRange(2, 1, lastRow - 1, 13).getValues();
     values.forEach(function (row) {
       if (!row[0]) return;
       cards.push(liberacaoRowToCard(row));
