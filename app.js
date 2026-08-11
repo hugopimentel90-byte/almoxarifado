@@ -239,7 +239,10 @@ async function fetchDashboardData() {
         pagoEm: pagoEmVal,
         mes: parseInt(cells[headerIndexes['mes']], 10) || (dateObj.getMonth() + 1),
         categoria: cells[headerIndexes['categoria']] || 'Outros',
-        precoMedio: parseNumber(cells[headerIndexes['precomedio']])
+        precoMedio: parseNumber(cells[headerIndexes['precomedio']]),
+        // Coluna L ("Tempo"): minutos gastos na retirada, preenchido só na
+        // primeira linha de cada lote de itens de um mesmo pedido.
+        tempoRetiradaMinutos: headerIndexes['tempo'] !== undefined ? parseNumber(cells[headerIndexes['tempo']]) : 0
       });
     }
 
@@ -476,6 +479,11 @@ function updateKPIs() {
 
   const uniqueCategories = new Set(currentFilteredData.map(item => item.categoria));
   document.getElementById('kpiTotalCategories').textContent = uniqueCategories.size.toLocaleString('pt-BR');
+
+  const totalMinutos = currentFilteredData.reduce((acc, item) => acc + (Number(item.tempoRetiradaMinutos) || 0), 0);
+  const totalHoras = totalMinutos / 60;
+  document.getElementById('kpiTempoAlocado').textContent =
+    totalHoras.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' h';
 }
 
 // --- INTEGRAÇÃO COM CHART.JS ---
