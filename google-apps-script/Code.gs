@@ -253,7 +253,7 @@ function handleRetiradaMaterial(ss, items) {
     });
 
     // 3. Desconta fisicamente o estoque: primeiro da coluna C, depois das
-    //    colunas de entrada (F em diante, da mais antiga para a mais nova).
+    //    colunas de entrada (G em diante, da mais antiga para a mais nova).
     Object.keys(stockByProduct).forEach(function (key) {
       const info = stockByProduct[key];
       if (info && info.requested > 0) {
