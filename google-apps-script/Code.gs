@@ -34,12 +34,12 @@
  *       considerar o que outras linhas já têm preenchido nas mesmas colunas)
  *
  *   O nível de estoque de cada produto (consultado via GET ?action=estoque) é:
- *     coluna C + soma das colunas de entrada (F em diante)
+ *     coluna C + soma das colunas de entrada (G em diante)
  *
  *   Esse valor já reflete as retiradas: toda vez que uma retirada é enviada,
  *   o script primeiro verifica se há saldo suficiente (C + entradas) e, se
  *   houver, desconta a quantidade retirada diretamente das células — primeiro
- *   da coluna C, e se não for suficiente, das colunas de entrada (F em diante,
+ *   da coluna C, e se não for suficiente, das colunas de entrada (G em diante,
  *   da mais antiga para a mais nova). Se o saldo não for suficiente, a retirada
  *   inteira é rejeitada (nada é gravado) e o app mostra um aviso ao usuário.
  *
@@ -293,7 +293,7 @@ function buildStockInfo(sheet, row, productName) {
 
 /**
  * Desconta qtyToRemove do saldo de um produto: primeiro da coluna C, e se
- * não for suficiente, das colunas de entrada (F em diante, da mais antiga
+ * não for suficiente, das colunas de entrada (G em diante, da mais antiga
  * para a mais nova) até zerar a quantidade a remover.
  */
 function decrementEstoqueStock(sheet, row, qtyToRemove) {
@@ -326,7 +326,7 @@ function decrementEstoqueStock(sheet, row, qtyToRemove) {
 
 /**
  * Grava entradas de material na aba "Estoque". Para cada item, a coluna de
- * destino é decidida individualmente pela LINHA daquele produto: começa em F
+ * destino é decidida individualmente pela LINHA daquele produto: começa em G
  * e avança até achar a primeira célula vazia NAQUELA linha (independente do
  * que outras linhas/produtos já têm preenchido). Produtos que ainda não
  * existem na coluna A são adicionados automaticamente. Quando o item chega
