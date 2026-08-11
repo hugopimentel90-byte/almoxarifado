@@ -553,6 +553,19 @@ function formatLiberacaoTimestamp(date) {
   return Utilities.formatDate(date, Session.getScriptTimeZone(), "dd/MM/yy HH:mm");
 }
 
+/**
+ * O Google Sheets às vezes reconhece o texto "dd/MM/yy HH:mm" gravado pelo
+ * script como uma data de verdade e devolve um objeto Date ao ler a célula
+ * (em vez do texto original). Esta função normaliza esse valor para sempre
+ * sair como texto formatado, seja qual for a forma como o Sheets o guardou.
+ */
+function formatLiberacaoCell(value) {
+  if (value instanceof Date) {
+    return formatLiberacaoTimestamp(value);
+  }
+  return value;
+}
+
 function liberacaoRowToCard(row) {
   return {
     id: row[0],
@@ -562,10 +575,10 @@ function liberacaoRowToCard(row) {
     nomeArquivo: row[4],
     urlArquivo: row[5],
     status: row[6],
-    criadoEm: row[7],
-    transmitidoEm: row[8],
-    aprovadoEncarregadoEm: row[9],
-    aprovadoImediatoEm: row[10],
+    criadoEm: formatLiberacaoCell(row[7]),
+    transmitidoEm: formatLiberacaoCell(row[8]),
+    aprovadoEncarregadoEm: formatLiberacaoCell(row[9]),
+    aprovadoImediatoEm: formatLiberacaoCell(row[10]),
     ultimaAcao: row[11],
     itens: parseLiberacaoItens(row[12])
   };

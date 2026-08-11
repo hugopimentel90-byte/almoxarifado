@@ -2593,14 +2593,14 @@ function closeLiberacaoCardDetail() {
 
 /**
  * Mostra a lista de Produto/Quantidade extraída do documento, apenas nas
- * etapas Encarregado (editável) e Imediato (somente visualização, mostrando
- * o que o Encarregado alterou ou manteve).
+ * etapas Encarregado (editável) e Imediato/Liberados (somente visualização,
+ * mostrando o que o Encarregado alterou ou manteve).
  */
 function renderLiberacaoItemsSection(card) {
   const section = document.getElementById('liberacaoItemsSection');
   const addBtn = document.getElementById('btnAddLiberacaoItem');
 
-  if (card.status !== 'Encarregado' && card.status !== 'Imediato') {
+  if (card.status !== 'Encarregado' && card.status !== 'Imediato' && card.status !== 'Liberados') {
     section.classList.add('hidden');
     currentLiberacaoItems = [];
     return;
