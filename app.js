@@ -48,6 +48,8 @@ let pendingCustomEntradaProductName = '';
 let stockData = []; // Armazena [{ produto, un, categoria, codigoBarras, total }] vindo da aba "Estoque"
 let currentEstoqueCategory = "";
 let estoqueSearchQuery = "";
+let stockLevelsFetchPromise = null; // Promise da busca de estoque em andamento, para a tela de categoria poder aguardá-la
+let stockLevelsLoadFailed = false; // true quando a última busca de estoque falhou (para não confundir com "categoria vazia")
 
 // Estado da Aba de Liberação de Documentos
 const LIBERACAO_COLUMNS = ['Setor', 'Encarregado', 'Imediato', 'Liberados'];
@@ -343,7 +345,7 @@ function switchTab(tabName) {
     menuEstoque.classList.add('active');
     viewEstoque.classList.remove('hidden');
     showEstoqueScreen('categories');
-    fetchStockLevels();
+    stockLevelsFetchPromise = fetchStockLevels();
   } else if (tabName === 'liberacao') {
     menuLiberacao.classList.add('active');
     viewLiberacao.classList.remove('hidden');
@@ -2316,14 +2318,28 @@ function showEstoqueScreen(screen) {
   }
 }
 
-function openEstoqueCategory(category) {
+async function openEstoqueCategory(category) {
   currentEstoqueCategory = category;
   document.getElementById('selectedEstoqueCategoryTitle').textContent = category;
   estoqueSearchQuery = '';
   document.getElementById('estoqueSearchInput').value = '';
 
-  renderEstoqueTable();
   showEstoqueScreen('list');
+
+  // Se a busca de estoque disparada ao abrir a aba ainda estiver em andamento,
+  // espera ela terminar antes de renderizar — evita mostrar "Nenhum produto
+  // encontrado" só porque o usuário clicou na categoria rápido demais.
+  if (stockLevelsFetchPromise) {
+    renderEstoqueLoadingState();
+    await stockLevelsFetchPromise;
+  }
+
+  renderEstoqueTable();
+}
+
+function renderEstoqueLoadingState() {
+  const tbody = document.getElementById('estoqueTableBody');
+  tbody.innerHTML = `<tr><td colspan="3" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Carregando itens do estoque...</td></tr>`;
 }
 
 function getCategoryForProduct(productName) {
@@ -2350,7 +2366,10 @@ function renderEstoqueTable() {
   items = items.slice().sort((a, b) => a.produto.localeCompare(b.produto));
 
   if (items.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="3" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Nenhum produto encontrado nesta categoria</td></tr>`;
+    const message = stockLevelsLoadFailed
+      ? 'Não foi possível carregar os dados do estoque. Verifique sua conexão e tente novamente.'
+      : 'Nenhum produto encontrado nesta categoria';
+    tbody.innerHTML = `<tr><td colspan="3" style="text-align: center; color: ${stockLevelsLoadFailed ? 'var(--color-danger)' : 'var(--text-secondary)'}; padding: 2rem;">${message}</td></tr>`;
     return;
   }
 
@@ -2377,6 +2396,7 @@ async function fetchStockLevels() {
   }
 
   showLoading(true);
+  stockLevelsLoadFailed = false;
   try {
     const response = await fetch(`${SCRIPT_URL}?action=estoque&t=${new Date().getTime()}`, {
       method: 'GET',
@@ -2397,6 +2417,7 @@ async function fetchStockLevels() {
     console.error("Erro ao consultar níveis de estoque:", error);
     showToast("Erro ao consultar o estoque na planilha.", "error");
     stockData = [];
+    stockLevelsLoadFailed = true;
   } finally {
     showLoading(false);
   }
