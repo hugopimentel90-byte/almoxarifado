@@ -25,8 +25,11 @@
  *   D - Categoria (Produto de limpeza, Escritório, Industrial, Prefeitura),
  *       preenchida apenas quando o material é cadastrado como novo pelo
  *       formulário de Entrada
- *   E - não utilizada por este formulário
- *   F em diante - cada entrada é gravada na primeira coluna vazia A PARTIR DE F
+ *   E - Código de Barras do produto (preenchido manualmente na planilha).
+ *       Usado pela leitura via leitor de código de barras na tela de Retirada
+ *       para identificar automaticamente o produto correspondente.
+ *   F - não utilizada por este formulário
+ *   G em diante - cada entrada é gravada na primeira coluna vazia A PARTIR DE G
  *       NAQUELA LINHA especificamente (análise individual por produto, sem
  *       considerar o que outras linhas já têm preenchido nas mesmas colunas)
  *
@@ -82,7 +85,8 @@
 
 const REGISTRO_SHEET_NAME = "Registro";
 const ESTOQUE_SHEET_NAME = "Estoque";
-const ESTOQUE_START_COLUMN = 6; // coluna F
+const ESTOQUE_START_COLUMN = 7; // coluna G
+const ESTOQUE_BARCODE_COLUMN = 5; // coluna E
 
 const LIBERACAO_SHEET_NAME = "Liberacao";
 const LIBERACAO_DRIVE_FOLDER_NAME = "Almoxarifado - Documentos de Liberação";
@@ -445,11 +449,12 @@ function doGet(e) {
 
 /**
  * Calcula o nível de estoque de cada produto na aba "Estoque":
- * coluna C (quantidade base) + soma das colunas de entrada (F em diante).
+ * coluna C (quantidade base) + soma das colunas de entrada (G em diante).
  * As retiradas já são refletidas aqui, pois são descontadas diretamente das
  * células no momento em que acontecem (ver handleRetiradaMaterial). Também
- * devolve a categoria (coluna D), quando preenchida, para o app conseguir
- * classificar na Consulta de Estoque mesmo produtos sem histórico de retirada.
+ * devolve a categoria (coluna D) e o código de barras (coluna E), quando
+ * preenchidos, para o app conseguir classificar na Consulta de Estoque e
+ * identificar produtos automaticamente na leitura por código de barras.
  */
 function getEstoqueLevels() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -470,6 +475,7 @@ function getEstoqueLevels() {
     const units = sheet.getRange(2, 2, rowCount, 1).getValues();
     const baseValues = sheet.getRange(2, 3, rowCount, 1).getValues();
     const categories = sheet.getRange(2, 4, rowCount, 1).getValues();
+    const barcodes = sheet.getRange(2, ESTOQUE_BARCODE_COLUMN, rowCount, 1).getValues();
     const entradaValues = entradaColumnCount > 0
       ? sheet.getRange(2, ESTOQUE_START_COLUMN, rowCount, entradaColumnCount).getValues()
       : [];
@@ -481,6 +487,7 @@ function getEstoqueLevels() {
       const un = String(units[i][0] || "").trim();
       const base = Number(baseValues[i][0]) || 0;
       const categoria = String(categories[i][0] || "").trim();
+      const codigoBarras = String(barcodes[i][0] || "").trim();
 
       let entradasSum = 0;
       for (let j = 0; j < entradaColumnCount; j++) {
@@ -491,6 +498,7 @@ function getEstoqueLevels() {
         produto: produto,
         un: un,
         categoria: categoria,
+        codigoBarras: codigoBarras,
         total: base + entradasSum
       });
     }

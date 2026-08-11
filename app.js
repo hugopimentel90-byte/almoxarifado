@@ -23,6 +23,10 @@ let selectedCategory = "";
 let uniqueProductNamesForCategory = [];
 let selectedItemsDetails = new Map(); // Armazena { nomeProduto => { qtd: X, un: Y } }
 
+// Estado da Leitura por Código de Barras (dentro da tela de Retirada)
+let scannedItemsMap = new Map(); // Armazena { codigo => { codigo, quantidade, matched, produto, un } }
+let barcodeToProductMap = new Map(); // Armazena { codigoBarras => item do estoque }
+
 // Estado do cronômetro de Tempo de Retirada
 let withdrawalTimerState = 'idle'; // idle | running | paused | finished
 let withdrawalTimerStartTimestamp = null; // Date.now() do último (re)início
@@ -37,7 +41,7 @@ let entradaCustomCategories = {}; // Lembra a categoria escolhida para materiais
 let pendingCustomEntradaProductName = '';
 
 // Estado da Aba de Consulta de Estoque
-let stockData = []; // Armazena [{ produto, un, total }] vindo da aba "Estoque"
+let stockData = []; // Armazena [{ produto, un, categoria, codigoBarras, total }] vindo da aba "Estoque"
 let currentEstoqueCategory = "";
 let estoqueSearchQuery = "";
 
@@ -926,6 +930,23 @@ function initializeWithdrawalModule() {
   document.getElementById('btnTimerFinish').addEventListener('click', handleTimerFinish);
   document.getElementById('btnTimerReset').addEventListener('click', handleTimerReset);
   document.getElementById('formManualTime').addEventListener('input', handleManualTimeInput);
+
+  // Leitura por Código de Barras
+  document.getElementById('btnUseBarcodeScanner').addEventListener('click', openBarcodeScannerModal);
+  document.getElementById('btnCancelBarcodeScan').addEventListener('click', closeBarcodeScannerModal);
+  document.getElementById('barcodeScannerModal').addEventListener('click', (e) => {
+    if (e.target.id === 'barcodeScannerModal') {
+      closeBarcodeScannerModal();
+    }
+  });
+  document.getElementById('barcodeScannerInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      processBarcodeScan(e.target.value);
+      e.target.value = '';
+    }
+  });
+  document.getElementById('btnConfirmBarcodeScan').addEventListener('click', handleConfirmBarcodeScan);
 }
 
 function openWithdrawalForm(category) {
@@ -1154,6 +1175,184 @@ function updateItemUnit(name, unit) {
   if (selectedItemsDetails.has(name)) {
     selectedItemsDetails.get(name).un = unit;
   }
+}
+
+// --- LEITURA POR CÓDIGO DE BARRAS (TELA DE RETIRADA) ---
+
+/**
+ * Abre a tela de leitura, busca os níveis de estoque atualizados (que
+ * incluem o código de barras de cada produto) e libera o campo de leitura
+ * assim que o mapeamento código -> produto estiver pronto.
+ */
+async function openBarcodeScannerModal() {
+  scannedItemsMap.clear();
+  renderBarcodeScannerList();
+
+  const modal = document.getElementById('barcodeScannerModal');
+  const input = document.getElementById('barcodeScannerInput');
+  modal.classList.remove('hidden');
+  input.value = '';
+  input.disabled = true;
+  input.placeholder = 'Carregando produtos cadastrados...';
+
+  await fetchStockLevels();
+  buildBarcodeLookupMap();
+
+  input.disabled = false;
+  input.placeholder = 'Aponte o leitor aqui e escaneie...';
+  input.focus();
+}
+
+function closeBarcodeScannerModal() {
+  document.getElementById('barcodeScannerModal').classList.add('hidden');
+  scannedItemsMap.clear();
+}
+
+function buildBarcodeLookupMap() {
+  barcodeToProductMap = new Map();
+  stockData.forEach(item => {
+    if (item.codigoBarras) {
+      barcodeToProductMap.set(String(item.codigoBarras).trim(), item);
+    }
+  });
+}
+
+/**
+ * Processa uma leitura: se o código já foi lido nesta sessão, soma 1 à
+ * quantidade; caso contrário, tenta identificar o produto correspondente
+ * pelo código de barras cadastrado na aba "Estoque". Se não encontrar,
+ * mantém o próprio código como identificador do item (fica a cargo do
+ * usuário depois vincular esse código a um produto na planilha).
+ */
+function processBarcodeScan(rawCode) {
+  const code = rawCode.trim();
+  if (!code) return;
+
+  const existing = scannedItemsMap.get(code);
+  if (existing) {
+    existing.quantidade++;
+  } else {
+    const match = barcodeToProductMap.get(code);
+    scannedItemsMap.set(code, {
+      codigo: code,
+      quantidade: 1,
+      matched: !!match,
+      produto: match ? match.produto : code,
+      un: match ? (match.un || 'un') : 'un'
+    });
+  }
+
+  renderBarcodeScannerList();
+}
+
+function renderBarcodeScannerList() {
+  const container = document.getElementById('barcodeScannerList');
+  const emptyMsg = document.getElementById('barcodeScannerEmpty');
+  container.innerHTML = '';
+
+  const hasItems = scannedItemsMap.size > 0;
+  container.classList.toggle('hidden', !hasItems);
+  emptyMsg.classList.toggle('hidden', hasItems);
+  document.getElementById('btnConfirmBarcodeScan').disabled = !hasItems;
+
+  scannedItemsMap.forEach((entry, code) => {
+    const row = document.createElement('div');
+    row.className = 'selected-item-row selected-item-row--barcode';
+
+    const nameEl = document.createElement('div');
+    nameEl.className = 'selected-item-name';
+    if (entry.matched) {
+      nameEl.textContent = entry.produto;
+      nameEl.title = `Código: ${code}`;
+    } else {
+      nameEl.innerHTML = `${code} <span class="barcode-unmatched-tag">não cadastrado</span>`;
+      nameEl.title = 'Código não vinculado a nenhum produto no Estoque';
+    }
+    row.appendChild(nameEl);
+
+    const qtyControl = document.createElement('div');
+    qtyControl.className = 'quantity-control';
+
+    const btnMinus = document.createElement('button');
+    btnMinus.type = 'button';
+    btnMinus.className = 'quantity-btn';
+    btnMinus.textContent = '−';
+    btnMinus.onclick = () => {
+      if (entry.quantidade > 1) {
+        entry.quantidade--;
+        renderBarcodeScannerList();
+      }
+    };
+
+    const inputQty = document.createElement('input');
+    inputQty.type = 'number';
+    inputQty.className = 'quantity-input';
+    inputQty.value = entry.quantidade;
+    inputQty.min = 1;
+    inputQty.onchange = (e) => {
+      let val = parseInt(e.target.value, 10);
+      if (isNaN(val) || val < 1) val = 1;
+      entry.quantidade = val;
+      renderBarcodeScannerList();
+    };
+
+    const btnPlus = document.createElement('button');
+    btnPlus.type = 'button';
+    btnPlus.className = 'quantity-btn';
+    btnPlus.textContent = '+';
+    btnPlus.onclick = () => {
+      entry.quantidade++;
+      renderBarcodeScannerList();
+    };
+
+    qtyControl.appendChild(btnMinus);
+    qtyControl.appendChild(inputQty);
+    qtyControl.appendChild(btnPlus);
+    row.appendChild(qtyControl);
+
+    const btnDelete = document.createElement('button');
+    btnDelete.type = 'button';
+    btnDelete.className = 'selected-item-delete-btn';
+    btnDelete.title = 'Remover leitura';
+    btnDelete.innerHTML = `
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+      </svg>
+    `;
+    btnDelete.addEventListener('click', () => {
+      scannedItemsMap.delete(code);
+      renderBarcodeScannerList();
+    });
+    row.appendChild(btnDelete);
+
+    container.appendChild(row);
+  });
+}
+
+/**
+ * Transfere os itens lidos para a lista normal de itens selecionados da
+ * retirada (somando à quantidade já existente, se o produto já tiver sido
+ * selecionado manualmente) e segue o fluxo padrão do formulário.
+ */
+function handleConfirmBarcodeScan() {
+  if (scannedItemsMap.size === 0) {
+    showToast("Nenhum código foi lido.", "error");
+    return;
+  }
+
+  scannedItemsMap.forEach(entry => {
+    if (selectedItemsDetails.has(entry.produto)) {
+      selectedItemsDetails.get(entry.produto).qtd += entry.quantidade;
+    } else {
+      selectedItemsDetails.set(entry.produto, { qtd: entry.quantidade, un: entry.un });
+    }
+  });
+
+  const count = scannedItemsMap.size;
+  closeBarcodeScannerModal();
+  updateMultiselectLabel();
+  renderSelectedItemsRows();
+  showToast(`${count} código(s) processado(s) e adicionados à retirada.`, "success");
 }
 
 function handleWithdrawalFormSubmit() {
@@ -1508,6 +1707,7 @@ function updateWithdrawalFormLockState() {
   document.getElementById('formSector').disabled = !captured;
   document.getElementById('formOrderNumber').disabled = !captured;
   document.getElementById('btnSubmitWithdrawal').disabled = !captured;
+  document.getElementById('btnUseBarcodeScanner').disabled = !captured;
 
   const statusEl = document.getElementById('withdrawalTimerStatus');
   const statusValueEl = document.getElementById('withdrawalTimerStatusValue');

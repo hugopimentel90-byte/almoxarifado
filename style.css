@@ -992,6 +992,89 @@ tr:hover td { background-color: var(--bg-primary); }
   margin-top: 0.5rem;
 }
 
+.form-header-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin: 1rem 0 1.5rem 0;
+}
+
+.form-header-title-row .form-header-title {
+  margin: 0;
+}
+
+.btn-barcode-scanner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.875rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  font-family: var(--font-family);
+  color: var(--color-primary);
+  background-color: var(--color-primary-light);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: var(--transition);
+  white-space: nowrap;
+}
+
+.btn-barcode-scanner:hover:not(:disabled) {
+  background-color: var(--color-primary);
+  color: #ffffff;
+}
+
+.btn-barcode-scanner:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-barcode-scanner svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+/* Modal de Leitura por Código de Barras */
+.barcode-scanner-input {
+  width: 100%;
+  padding: 0.875rem 1rem;
+  font-size: 1.125rem;
+  font-family: var(--font-family);
+  border: 2px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  outline: none;
+  text-align: center;
+  letter-spacing: 0.05em;
+}
+
+.barcode-scanner-input:disabled {
+  border-color: var(--border-color);
+  background-color: var(--bg-primary);
+  color: var(--text-muted);
+}
+
+.selected-item-row--barcode {
+  grid-template-columns: 2fr 1fr auto;
+}
+
+.barcode-unmatched-tag {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-warning);
+  background-color: var(--color-warning-light);
+  border-radius: var(--radius-sm);
+  vertical-align: middle;
+}
+
 /* Componente Dropdown Múltipla Escolha com Busca */
 .multiselect-container {
   position: relative;

@@ -113,6 +113,24 @@
     </div>
   </div>
 
+  <!-- Modal de Leitura por Código de Barras -->
+  <div id="barcodeScannerModal" class="modal-overlay hidden">
+    <div class="modal-card modal-card--wide">
+      <h2 class="modal-title">Leitura por Código de Barras</h2>
+      <p class="modal-subtitle">Aponte o leitor para o campo abaixo e escaneie os produtos. Cada leitura soma 1 unidade automaticamente; ajuste as quantidades se precisar.</p>
+
+      <input type="text" id="barcodeScannerInput" class="barcode-scanner-input" placeholder="Aguardando leitor..." autocomplete="off" disabled>
+
+      <div id="barcodeScannerList" class="selected-items-list hidden"></div>
+      <p id="barcodeScannerEmpty" class="kanban-column-empty">Nenhum código lido ainda.</p>
+
+      <div class="form-actions" style="margin-top: 1.5rem;">
+        <button type="button" id="btnCancelBarcodeScan" class="btn btn-secondary">Cancelar</button>
+        <button type="button" id="btnConfirmBarcodeScan" class="btn btn-submit" disabled>Concluir Leitura</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal de Confirmação de Entrada de Material (Senha de Liberação) -->
   <div id="confirmEntradaModal" class="modal-overlay hidden">
     <div class="modal-card">
@@ -571,8 +589,16 @@
             Voltar para Categorias
           </button>
           
-          <div class="form-header-title" style="margin: 1rem 0 1.5rem 0;">
-            Nova Retirada: <span id="selectedCategoryTitle" style="color: var(--color-primary);">--</span>
+          <div class="form-header-title-row">
+            <div class="form-header-title">
+              Nova Retirada: <span id="selectedCategoryTitle" style="color: var(--color-primary);">--</span>
+            </div>
+            <button type="button" id="btnUseBarcodeScanner" class="btn-barcode-scanner" disabled>
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6v12M8 6v12M11 6v12M15 6v12M17 6v12M20 6v12"></path>
+              </svg>
+              Usar o leitor
+            </button>
           </div>
 
           <div class="withdrawal-form-card">
