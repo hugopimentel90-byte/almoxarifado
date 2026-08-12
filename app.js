@@ -706,6 +706,50 @@ function updateCharts() {
       }
     }
   });
+
+  // 5. Pedidos por Setor (quantidade de pedidos distintos, não de itens),
+  // respeitando os mesmos filtros ativos do Dashboard, em ordem decrescente.
+  const ordersBySector = {};
+  currentFilteredData.forEach(item => {
+    if (!item.pedido || item.pedido === 'Sem Pedido') return;
+    if (!ordersBySector[item.setor]) {
+      ordersBySector[item.setor] = new Set();
+    }
+    ordersBySector[item.setor].add(item.pedido);
+  });
+  const sortedOrdersBySector = Object.entries(ordersBySector)
+    .map(([setor, pedidos]) => [setor, pedidos.size])
+    .sort((a, b) => b[1] - a[1]);
+  const orderSecLabels = sortedOrdersBySector.map(s => s[0]);
+  const orderSecValues = sortedOrdersBySector.map(s => s[1]);
+
+  updateChart('chartOrdersBySector', 'bar', orderSecLabels, [{
+    label: 'Pedidos por Setor',
+    data: orderSecValues,
+    backgroundColor: '#f59e0b',
+    borderRadius: 4,
+    barThickness: 16
+  }], {
+    layout: {
+      padding: { top: 20 }
+    },
+    scales: {
+      y: { grid: { color: 'rgba(226, 232, 240, 0.4)' }, ticks: { font: { family: 'Inter' }, precision: 0 } },
+      x: { grid: { display: false }, ticks: { font: { family: 'Inter' } } }
+    },
+    plugins: {
+      datalabels: {
+        display: true,
+        align: 'end',
+        anchor: 'end',
+        offset: 4,
+        clamp: true,
+        color: '#f59e0b',
+        font: { family: 'Inter', size: 11, weight: '600' },
+        formatter: formatDataLabelValue
+      }
+    }
+  });
 }
 
 // --- PAINEL DE CONSUMO LIMITE POR SETOR ---
