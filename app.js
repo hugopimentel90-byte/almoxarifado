@@ -337,6 +337,7 @@ function switchTab(tabName) {
     viewRetirada.classList.remove('hidden');
     resetWithdrawalForm();
     showRetiradaScreen('categories');
+    stockLevelsFetchPromise = fetchStockLevels();
   } else if (tabName === 'entrada') {
     menuEntrada.classList.add('active');
     viewEntrada.classList.remove('hidden');
@@ -969,7 +970,7 @@ function initializeWithdrawalModule() {
   document.getElementById('btnConfirmBarcodeScan').addEventListener('click', handleConfirmBarcodeScan);
 }
 
-function openWithdrawalForm(category) {
+async function openWithdrawalForm(category) {
   selectedCategory = category;
   document.getElementById('selectedCategoryTitle').textContent = category;
 
@@ -979,13 +980,33 @@ function openWithdrawalForm(category) {
   document.getElementById('formOrderNumber').value = '';
   document.getElementById('formSector').value = '';
   resetWithdrawalTimer();
+  updateMultiselectLabel();
+  renderSelectedItemsRows();
 
-  // Filtra itens com base na categoria selecionada
-  let items = rawData.filter(item => item.categoria.toLowerCase() === category.toLowerCase());
+  showRetiradaScreen('form');
 
-  // Se a categoria for "Prefeitura" (ou outra sem produtos correspondentes), listamos todos como fallback
+  // Espera a busca de estoque (referência atual de produtos/categorias)
+  // terminar, caso ainda esteja em andamento, para não popular a lista de
+  // seleção com dados vazios — mesma proteção contra corrida usada na aba
+  // de Consulta de Estoque.
+  if (stockLevelsFetchPromise) {
+    await stockLevelsFetchPromise;
+  }
+
+  rebuildWithdrawalProductOptions(category);
+}
+
+/**
+ * Monta a lista de produtos selecionáveis no formulário de Retirada a
+ * partir da aba "Estoque" (fonte de verdade de produtos/categorias),
+ * filtrando pela categoria escolhida.
+ */
+function rebuildWithdrawalProductOptions(category) {
+  let items = stockData.filter(item => (item.categoria || '').toLowerCase() === category.toLowerCase());
+
+  // Se a categoria não tiver produtos correspondentes cadastrados no Estoque, listamos todos como fallback
   if (items.length === 0) {
-    items = rawData;
+    items = stockData;
   }
 
   // Lista única ordenada dos produtos
@@ -993,10 +1014,6 @@ function openWithdrawalForm(category) {
 
   // Renderiza opções no checklist
   renderMultiselectOptions();
-  updateMultiselectLabel();
-  renderSelectedItemsRows();
-
-  showRetiradaScreen('form');
 }
 
 function renderMultiselectOptions(searchQuery = '') {
@@ -1038,9 +1055,11 @@ function renderMultiselectOptions(searchQuery = '') {
 
 function toggleItemSelection(name, isChecked) {
   if (isChecked) {
-    // Busca a última unidade usada desse produto para sugerir por padrão
-    const match = rawData.find(item => item.produto === name);
-    const defaultUnit = match ? match.un : 'un';
+    // Busca a unidade cadastrada na aba "Estoque" para sugerir por padrão;
+    // se o produto ainda não tiver unidade lá, cai para o histórico de retiradas.
+    const stockMatch = stockData.find(item => item.produto === name);
+    const rawMatch = rawData.find(item => item.produto === name);
+    const defaultUnit = (stockMatch && stockMatch.un) || (rawMatch && rawMatch.un) || 'un';
 
     selectedItemsDetails.set(name, {
       qtd: 1,
