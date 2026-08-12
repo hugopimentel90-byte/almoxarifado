@@ -3029,6 +3029,29 @@ function handleAddLiberacaoItem() {
   renderLiberacaoItemsList(true);
 }
 
+/**
+ * Mostra um estado "Processando..." dentro do próprio botão (spinner +
+ * texto), desabilitando-o. Usado nas ações de Liberação em vez do overlay
+ * global de carregamento, que fica escondido atrás do modal do card (o
+ * modal tem z-index maior que o overlay) e por isso parecia que nada
+ * estava acontecendo ao clicar em Transmitir/Aprovado/Recusar.
+ */
+function setButtonProcessing(button, label) {
+  if (!button || button.dataset.processing === '1') return;
+  button.dataset.processing = '1';
+  button.dataset.originalLabel = button.textContent;
+  button.disabled = true;
+  button.innerHTML = `<span class="btn-spinner"></span>${label}`;
+}
+
+function clearButtonProcessing(button) {
+  if (!button || button.dataset.processing !== '1') return;
+  button.textContent = button.dataset.originalLabel || button.textContent;
+  button.disabled = false;
+  delete button.dataset.processing;
+  delete button.dataset.originalLabel;
+}
+
 async function handleLiberacaoAdvance() {
   const card = liberacaoCards.find(c => c.id === currentLiberacaoCardId);
   if (!card) return;
@@ -3046,7 +3069,11 @@ async function handleLiberacaoAdvance() {
     }
   }
 
-  showLoading(true);
+  const advanceBtn = document.getElementById('btnLiberacaoAdvance');
+  const rejectBtn = document.getElementById('btnLiberacaoReject');
+  setButtonProcessing(advanceBtn, 'Processando...');
+  rejectBtn.disabled = true;
+
   try {
     const response = await fetch(SCRIPT_URL, {
       method: 'POST',
@@ -3070,7 +3097,8 @@ async function handleLiberacaoAdvance() {
     errorEl.textContent = error.message || "Senha incorreta ou erro ao processar.";
     errorEl.classList.remove('hidden');
   } finally {
-    showLoading(false);
+    clearButtonProcessing(advanceBtn);
+    rejectBtn.disabled = false;
   }
 }
 
@@ -3078,7 +3106,11 @@ async function handleLiberacaoReject() {
   const card = liberacaoCards.find(c => c.id === currentLiberacaoCardId);
   if (!card) return;
 
-  showLoading(true);
+  const advanceBtn = document.getElementById('btnLiberacaoAdvance');
+  const rejectBtn = document.getElementById('btnLiberacaoReject');
+  setButtonProcessing(rejectBtn, 'Processando...');
+  advanceBtn.disabled = true;
+
   try {
     const response = await fetch(SCRIPT_URL, {
       method: 'POST',
@@ -3101,7 +3133,8 @@ async function handleLiberacaoReject() {
     console.error("Erro ao recusar card de liberação:", error);
     showToast("Erro ao recusar o documento. Tente novamente.", "error");
   } finally {
-    showLoading(false);
+    clearButtonProcessing(rejectBtn);
+    advanceBtn.disabled = false;
   }
 }
 

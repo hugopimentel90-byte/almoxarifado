@@ -524,6 +524,25 @@ header {
   to { transform: rotate(360deg); }
 }
 
+/* Spinner "Processando..." embutido em botões (ex.: ações de Liberação) */
+.btn-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  vertical-align: middle;
+  margin-right: 0.5rem;
+  opacity: 0.85;
+}
+
+.btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
 .last-update {
   font-size: 0.75rem;
   color: var(--text-muted);
