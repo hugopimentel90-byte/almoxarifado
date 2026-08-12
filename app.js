@@ -2627,11 +2627,17 @@ function readFileAsBase64(file) {
 }
 
 /**
- * Extrai pares Produto/Quantidade de um PDF, lendo o texto com posição
- * (x, y) via PDF.js, agrupando em linhas visuais (mesma altura) e tratando
- * como item de tabela qualquer linha que termine em um número — assim não
- * depende do texto exato dos cabeçalhos, só do formato "produto ... qtd"
- * (o último cara da linha e a quantidade).
+ * Extrai pares Produto/Quantidade de um PDF de Pedido Interno de Material
+ * (PIM) no modelo padrão do SISTOQUE (Marinha do Brasil), lendo o texto com
+ * posição (x, y) via PDF.js e agrupando em linhas visuais (mesma altura).
+ *
+ * Cada item da tabela "ITENS DO PEDIDO" começa com um código (ex.:
+ * "PI0000607", ou um código numérico puro de 6 a 10 dígitos como
+ * "190018026"), seguido da DESCRIÇÃO do material — que pode quebrar em mais
+ * de uma linha visual — e termina com as colunas SITUAÇÃO / QTD SOL. / QTD /
+ * INCUMB. (ex.: "CAD 1,00 -- 310"). A quantidade extraída é sempre a coluna
+ * QTD SOL. (a quantidade solicitada) — nunca o código de INCUMB. no final da
+ * linha, que não é uma quantidade.
  */
 async function extractProductQuantityFromPdf(file) {
   try {
@@ -2668,20 +2674,54 @@ async function extractProductQuantityFromPdf(file) {
         line.items.push(item);
       });
 
-    const parsedItems = [];
-    lines.forEach(line => {
+    const lineTexts = lines.map(line => {
       line.items.sort((a, b) => a.x - b.x);
-      const lineText = line.items.map(i => i.str).join(' ').replace(/\s+/g, ' ').trim();
+      return line.items.map(i => i.str).join(' ').replace(/\s+/g, ' ').trim();
+    });
 
-      // Considera "item de tabela" toda linha que termina em um número —
-      // funciona independente do texto exato dos cabeçalhos da tabela.
-      const match = lineText.match(/^(.+?)\s+(\d{1,5})$/);
-      if (match) {
-        const produto = match[1].trim();
-        const qtd = parseInt(match[2], 10);
-        if (produto && qtd > 0) {
-          parsedItems.push({ produto, qtd });
-        }
+    // Início de uma linha de item: código "PIxxxxxxx" ou um código numérico
+    // puro de 6 a 10 dígitos (ex.: "190018026").
+    const ROW_START_REGEX = /^(?:PI\d+|\d{6,10})\s*(.*)$/;
+    // Fechamento de uma linha de item: "<descrição> <SITUAÇÃO> <QTD SOL.> <QTD> <INCUMB.>".
+    // Captura a descrição (grupo 1) e a quantidade solicitada / QTD SOL. (grupo 2);
+    // a SITUAÇÃO (ex.: "CAD"), a QTD já incumbida (ex.: "--") e o código de
+    // INCUMB. no final (ex.: "310") são apenas exigidos no formato, não usados.
+    const ROW_END_REGEX = /^(.*?)\s+[A-ZÇÃÕÁÉÍÓÚÂÊÔÀ]{2,10}\s+(\d+(?:[.,]\d+)?)\s+\S+\s+\d+\s*$/u;
+
+    const parsedItems = [];
+    let pendingDescription = null;
+
+    const tryCloseRow = () => {
+      if (pendingDescription === null) return;
+      const endMatch = pendingDescription.match(ROW_END_REGEX);
+      if (!endMatch) return;
+
+      const produto = endMatch[1].trim();
+      const qtd = Math.round(parseFloat(endMatch[2].replace(',', '.')));
+      if (produto && qtd > 0) {
+        parsedItems.push({ produto, qtd });
+      }
+      pendingDescription = null;
+    };
+
+    lineTexts.forEach(lineText => {
+      if (!lineText) return;
+
+      const startMatch = lineText.match(ROW_START_REGEX);
+      if (startMatch) {
+        // Início de um novo item — descarta qualquer item anterior que não
+        // tenha fechado corretamente (linha incompleta/inesperada).
+        pendingDescription = startMatch[1].trim();
+        tryCloseRow();
+        return;
+      }
+
+      if (pendingDescription !== null) {
+        // Continuação da descrição de um item cujo texto quebrou em mais de
+        // uma linha visual (ou a própria linha de fechamento, com SITUAÇÃO/
+        // QTD SOL./QTD/INCUMB.).
+        pendingDescription = pendingDescription ? `${pendingDescription} ${lineText}` : lineText;
+        tryCloseRow();
       }
     });
 
