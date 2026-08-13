@@ -717,6 +717,10 @@ header {
   height: 350px;
 }
 
+.chart-card--full {
+  grid-column: 1 / -1;
+}
+
 .chart-title {
   font-size: 1rem;
   font-weight: 600;
