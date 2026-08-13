@@ -2810,14 +2810,16 @@ async function handleCreateLiberacaoCard() {
     return;
   }
 
-  showLoading(true);
+  const confirmBtn = document.getElementById('btnConfirmNewLiberacaoCard');
+  setButtonProcessing(confirmBtn, 'Enviando...');
   try {
-    const base64 = await readFileAsBase64(file);
-
-    // Se for um PDF, tenta extrair automaticamente os pares Produto/Quantidade
-    // pra já deixar prontos pra revisão do Encarregado.
+    // Leitura do arquivo (base64) e extração dos itens do PDF são
+    // independentes uma da outra — rodam em paralelo em vez de em série.
     const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
-    const itens = isPdf ? await extractProductQuantityFromPdf(file) : [];
+    const [base64, itens] = await Promise.all([
+      readFileAsBase64(file),
+      isPdf ? extractProductQuantityFromPdf(file) : Promise.resolve([])
+    ]);
 
     const response = await fetch(SCRIPT_URL, {
       method: 'POST',
@@ -2852,7 +2854,7 @@ async function handleCreateLiberacaoCard() {
     errorEl.textContent = error.message || "Erro ao enviar o documento. Tente novamente.";
     errorEl.classList.remove('hidden');
   } finally {
-    showLoading(false);
+    clearButtonProcessing(confirmBtn);
   }
 }
 

@@ -917,7 +917,10 @@ tr:hover td { background-color: var(--bg-primary); }
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  /* Precisa ficar ACIMA de .modal-overlay (z-index: 1200) — senão, sempre que
+     uma ação dentro de um modal chamar showLoading(true), o overlay renderiza
+     escondido atrás do próprio modal e parece que o app travou/não fez nada. */
+  z-index: 1300;
   gap: 1rem;
   backdrop-filter: blur(4px);
   transition: var(--transition);

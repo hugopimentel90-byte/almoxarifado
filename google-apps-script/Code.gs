@@ -372,10 +372,18 @@ function handleEntradaMaterial(ss, items) {
 /**
  * Retorna o número da última linha com conteúdo em uma coluna específica
  * (1 = coluna A). Considera a linha 1 como cabeçalho.
+ *
+ * Usa sheet.getLastRow() (a última linha com conteúdo em QUALQUER coluna da
+ * aba) como limite superior da busca, em vez de sheet.getMaxRows() (o total
+ * de linhas da aba, que costuma ser bem maior que os dados reais — ex.: 1000
+ * linhas numa aba nova). Isso evita ler centenas de linhas vazias à toa
+ * nessa função, que é chamada em toda gravação de Retirada/Entrada.
  */
 function getLastRowInColumn(sheet, column) {
-  const numRows = sheet.getMaxRows();
-  const values = sheet.getRange(1, column, numRows, 1).getValues();
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 1) return 1;
+
+  const values = sheet.getRange(1, column, lastRow, 1).getValues();
   for (let i = values.length - 1; i >= 0; i--) {
     if (values[i][0] !== "" && values[i][0] !== null) {
       return i + 1;
@@ -531,13 +539,28 @@ function getOrCreateLiberacaoSheet(ss) {
 /**
  * Retorna a pasta do Google Drive usada para os documentos de liberação,
  * criando-a se ainda não existir.
+ *
+ * O ID da pasta fica guardado nas Propriedades do Script depois da primeira
+ * busca, pra evitar refazer uma busca por nome (DriveApp.getFoldersByName,
+ * mais lenta) em toda criação de card — só busca por nome de novo se o ID
+ * guardado não existir mais (pasta movida/excluída manualmente).
  */
 function getOrCreateLiberacaoFolder() {
-  const folders = DriveApp.getFoldersByName(LIBERACAO_DRIVE_FOLDER_NAME);
-  if (folders.hasNext()) {
-    return folders.next();
+  const props = PropertiesService.getScriptProperties();
+  const cachedId = props.getProperty('LIBERACAO_FOLDER_ID');
+
+  if (cachedId) {
+    try {
+      return DriveApp.getFolderById(cachedId);
+    } catch (e) {
+      // Pasta não existe mais nesse ID (foi movida/excluída) — busca de novo abaixo.
+    }
   }
-  return DriveApp.createFolder(LIBERACAO_DRIVE_FOLDER_NAME);
+
+  const folders = DriveApp.getFoldersByName(LIBERACAO_DRIVE_FOLDER_NAME);
+  const folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(LIBERACAO_DRIVE_FOLDER_NAME);
+  props.setProperty('LIBERACAO_FOLDER_ID', folder.getId());
+  return folder;
 }
 
 /**
@@ -608,49 +631,58 @@ function parseLiberacaoItens(value) {
 /**
  * Cria um novo card na coluna "Setor", salvando o documento anexado (se
  * houver) no Google Drive.
+ *
+ * Importante: o upload para o Drive (buscar/criar a pasta, criar o arquivo,
+ * compartilhar) acontece ANTES de pegar o lock global do script, e portanto
+ * FORA dele. O Drive é um serviço separado do Sheets e já garante sua
+ * própria consistência — não precisa do nosso lock. Só a gravação da linha
+ * na planilha (sheet.appendRow) fica protegida pelo lock, e só por ela, que
+ * leva uma fração de segundo. Se o upload (que pode levar vários segundos)
+ * acontecesse dentro do lock, TODA outra operação do app — retiradas,
+ * entradas, outras ações de liberação, de qualquer computador — ficaria
+ * bloqueada esperando até o upload terminar.
  */
 function handleLiberacaoCriar(ss, payload) {
   const sheet = getOrCreateLiberacaoSheet(ss);
+
+  const setor = (payload.setor || "").trim();
+  const titulo = (payload.titulo || "").trim();
+  const descricao = (payload.descricao || "").trim();
+
+  if (!setor) throw new Error("Informe o setor.");
+  if (!titulo) throw new Error("Informe o título do documento.");
+
+  let nomeArquivo = "";
+  let urlArquivo = "";
+
+  if (payload.arquivo && payload.arquivo.base64) {
+    const folder = getOrCreateLiberacaoFolder();
+    const bytes = Utilities.base64Decode(payload.arquivo.base64);
+    const blob = Utilities.newBlob(
+      bytes,
+      payload.arquivo.mimeType || "application/octet-stream",
+      payload.arquivo.nome || "documento"
+    );
+    const file = folder.createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    nomeArquivo = payload.arquivo.nome || file.getName();
+    urlArquivo = file.getUrl();
+  }
+
+  const id = "LIB-" + new Date().getTime();
+  const nowStr = formatLiberacaoTimestamp(new Date());
+  const itensJSON = JSON.stringify(payload.itens || []);
+  const row = [id, setor, titulo, descricao, nomeArquivo, urlArquivo, "Setor", nowStr, "", "", "", "", itensJSON];
+
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
-
   try {
-    const setor = (payload.setor || "").trim();
-    const titulo = (payload.titulo || "").trim();
-    const descricao = (payload.descricao || "").trim();
-
-    if (!setor) throw new Error("Informe o setor.");
-    if (!titulo) throw new Error("Informe o título do documento.");
-
-    let nomeArquivo = "";
-    let urlArquivo = "";
-
-    if (payload.arquivo && payload.arquivo.base64) {
-      const folder = getOrCreateLiberacaoFolder();
-      const bytes = Utilities.base64Decode(payload.arquivo.base64);
-      const blob = Utilities.newBlob(
-        bytes,
-        payload.arquivo.mimeType || "application/octet-stream",
-        payload.arquivo.nome || "documento"
-      );
-      const file = folder.createFile(blob);
-      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-      nomeArquivo = payload.arquivo.nome || file.getName();
-      urlArquivo = file.getUrl();
-    }
-
-    const id = "LIB-" + new Date().getTime();
-    const nowStr = formatLiberacaoTimestamp(new Date());
-    const itensJSON = JSON.stringify(payload.itens || []);
-
-    const row = [id, setor, titulo, descricao, nomeArquivo, urlArquivo, "Setor", nowStr, "", "", "", "", itensJSON];
     sheet.appendRow(row);
-
-    return liberacaoRowToCard(row);
-
   } finally {
     lock.releaseLock();
   }
+
+  return liberacaoRowToCard(row);
 }
 
 /**
@@ -749,42 +781,48 @@ function handleLiberacaoRecusar(ss, payload) {
  * Exclui um card, mas apenas se ele ainda estiver na coluna "Setor" (antes de
  * ser transmitido para aprovação). Também move o arquivo anexado, se houver,
  * para a lixeira do Google Drive.
+ *
+ * Assim como em handleLiberacaoCriar, a chamada ao Drive (mover o arquivo
+ * pra lixeira) acontece DEPOIS de já ter soltado o lock — ela é uma
+ * requisição de rede separada e não deve travar o resto do app enquanto
+ * acontece.
  */
 function handleLiberacaoExcluir(ss, payload) {
   const sheet = getOrCreateLiberacaoSheet(ss);
+
+  const id = payload.id;
+  if (!id) throw new Error("ID do card não informado.");
+
+  const rowIndex = findLiberacaoRowById(sheet, id);
+  if (rowIndex === -1) throw new Error("Card não encontrado.");
+
+  const status = sheet.getRange(rowIndex, 7).getValue();
+  if (status !== "Setor") {
+    throw new Error("Só é possível excluir documentos que ainda estão na coluna Setor.");
+  }
+
+  const urlArquivo = sheet.getRange(rowIndex, 6).getValue();
+
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
-
   try {
-    const id = payload.id;
-    if (!id) throw new Error("ID do card não informado.");
-
-    const rowIndex = findLiberacaoRowById(sheet, id);
-    if (rowIndex === -1) throw new Error("Card não encontrado.");
-
-    const status = sheet.getRange(rowIndex, 7).getValue();
-    if (status !== "Setor") {
-      throw new Error("Só é possível excluir documentos que ainda estão na coluna Setor.");
-    }
-
-    const urlArquivo = sheet.getRange(rowIndex, 6).getValue();
-    if (urlArquivo) {
-      try {
-        const fileId = getDriveFileIdFromUrl(urlArquivo);
-        if (fileId) {
-          DriveApp.getFileById(fileId).setTrashed(true);
-        }
-      } catch (e) {
-        // Se não conseguir apagar o arquivo do Drive, segue removendo a linha mesmo assim.
-      }
-    }
-
     sheet.deleteRow(rowIndex);
-    return true;
-
   } finally {
     lock.releaseLock();
   }
+
+  if (urlArquivo) {
+    try {
+      const fileId = getDriveFileIdFromUrl(urlArquivo);
+      if (fileId) {
+        DriveApp.getFileById(fileId).setTrashed(true);
+      }
+    } catch (e) {
+      // Se não conseguir apagar o arquivo do Drive, a linha já foi removida mesmo assim.
+    }
+  }
+
+  return true;
 }
 
 /**
