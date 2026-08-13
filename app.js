@@ -890,7 +890,7 @@ function exportConsumoLimiteSetorPDF() {
 
   doc.setFontSize(16);
   doc.setTextColor(15, 23, 42);
-  doc.text('Consumo Limite por Setor', 14, 18);
+  doc.text('Consumo Médio do Setor / Limite para Retirada', 14, 18);
 
   doc.setFontSize(11);
   doc.setTextColor(71, 85, 105);
