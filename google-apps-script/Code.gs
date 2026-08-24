@@ -29,19 +29,20 @@
  *       Usado pela leitura via leitor de código de barras na tela de Retirada
  *       para identificar automaticamente o produto correspondente.
  *   F - não utilizada por este formulário
- *   G em diante - cada entrada é gravada na primeira coluna vazia A PARTIR DE G
- *       NAQUELA LINHA especificamente (análise individual por produto, sem
- *       considerar o que outras linhas já têm preenchido nas mesmas colunas)
+ *   G - total corrente de entradas: cada envio do formulário de Entrada SOMA
+ *       a quantidade aqui (não abre mais uma coluna nova a cada entrada —
+ *       isso mantém a aba com largura fixa para sempre, independente de há
+ *       quantos anos o Almoxarifado esteja em uso)
  *
  *   O nível de estoque de cada produto (consultado via GET ?action=estoque) é:
- *     coluna C + soma das colunas de entrada (G em diante)
+ *     coluna C + coluna G
  *
  *   Esse valor já reflete as retiradas: toda vez que uma retirada é enviada,
- *   o script primeiro verifica se há saldo suficiente (C + entradas) e, se
- *   houver, desconta a quantidade retirada diretamente das células — primeiro
- *   da coluna C, e se não for suficiente, das colunas de entrada (G em diante,
- *   da mais antiga para a mais nova). Se o saldo não for suficiente, a retirada
- *   inteira é rejeitada (nada é gravado) e o app mostra um aviso ao usuário.
+ *   o script primeiro verifica se há saldo suficiente (C + G) e, se houver,
+ *   desconta a quantidade retirada diretamente das células — primeiro da
+ *   coluna C, e se não for suficiente, da coluna G. Se o saldo não for
+ *   suficiente, a retirada inteira é rejeitada (nada é gravado) e o app
+ *   mostra um aviso ao usuário.
  *
  * Aba "Liberacao" (Kanban de Liberação de Documentos) — criada automaticamente
  * pelo script na primeira vez que for usada, com as colunas:
@@ -113,6 +114,228 @@ function autorizarAcessoAoDrive() {
   const testFile = folder.createFile(testBlob);
   testFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
   testFile.setTrashed(true);
+}
+
+/**
+ * FERRAMENTA DE LIMPEZA — RODAR MANUALMENTE, UMA VEZ, PELO EDITOR DO APPS SCRIPT.
+ *
+ * A aba "Estoque" acumulou muitas linhas duplicadas (o mesmo produto
+ * cadastrado várias vezes ao longo do tempo). Esta função NÃO altera nada —
+ * ela só lê a aba e mostra, no log (menu "Execução" > "Registros de
+ * execução", ou Ctrl+Enter depois de rodar), quais produtos têm linhas
+ * duplicadas e como ficariam se fossem consolidados numa única linha por
+ * produto. Rode esta função PRIMEIRO, revise o log com calma, e só depois
+ * rode consolidarProdutosDuplicadosEstoque() (logo abaixo) se o resultado
+ * fizer sentido.
+ */
+function preverConsolidacaoEstoque() {
+  const resultado = agruparDuplicatasEstoque_();
+  const duplicados = resultado.grupos.filter(function (g) { return g.linhas.length > 1; });
+
+  Logger.log('=== PRÉVIA DE CONSOLIDAÇÃO — NADA FOI ALTERADO NA PLANILHA ===');
+  Logger.log('Total de linhas de produto na aba: ' + resultado.totalLinhas);
+  Logger.log('Produtos únicos (nome, ignorando maiúsculas/minúsculas e espaços): ' + resultado.grupos.length);
+  Logger.log('Produtos com linhas duplicadas: ' + duplicados.length);
+  Logger.log('Linhas que seriam removidas no total: ' + resultado.totalLinhasRemovidas);
+  Logger.log('');
+
+  duplicados.forEach(function (g) {
+    const linhasStr = g.linhas.map(function (l) { return l.row; }).join(', ');
+    Logger.log(
+      '"' + g.produto + '" — ' + g.linhas.length + ' linhas (linhas ' + linhasStr + ') → ' +
+      '1 linha (a de número ' + g.linhas[0].row + ') com quantidade base = ' + g.novaBase +
+      ' e total de entradas = ' + g.entradaTotal
+    );
+  });
+}
+
+/**
+ * FERRAMENTA DE LIMPEZA — RODAR MANUALMENTE, UMA VEZ, PELO EDITOR DO APPS
+ * SCRIPT, DEPOIS DE REVISAR O LOG DE preverConsolidacaoEstoque().
+ *
+ * Consolida as linhas duplicadas da aba "Estoque" (mesmo nome de produto,
+ * ignorando maiúsculas/minúsculas e espaços nas pontas): reconstrói a área
+ * de dados da aba (linha 2 em diante) com UMA linha por produto — soma a
+ * quantidade base (coluna C) e o total de entradas (coluna G) de todas as
+ * duplicatas, e aproveita a primeira unidade/categoria/código de barras não
+ * vazios encontrados entre elas.
+ *
+ * Faz isso com POUCAS operações em lote (uma leitura, uma escrita, uma
+ * limpeza) em vez de uma operação por célula/linha, e escreve sempre
+ * exatamente UMA coluna de entrada (G) por produto — nunca uma por
+ * duplicata — pra aba nunca ficar larga demais (ver handleEntradaMaterial).
+ *
+ * ⚠️ Isso reescreve a aba inteira — é uma operação que não pode ser
+ * desfeita com Ctrl+Z depois de fechar a aba. Faça uma cópia da aba
+ * "Estoque" (clique direito na aba > Duplicar) antes de rodar esta função.
+ */
+function consolidarProdutosDuplicadosEstoque() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(ESTOQUE_SHEET_NAME);
+  if (!sheet) throw new Error('Aba "' + ESTOQUE_SHEET_NAME + '" não encontrada na planilha.');
+
+  const resultado = agruparDuplicatasEstoque_();
+  const grupos = resultado.grupos;
+  const totalLinhasAntigas = resultado.totalLinhas;
+  const totalColunas = ESTOQUE_START_COLUMN; // A..F fixas + G (única coluna de entrada)
+
+  // Monta em memória a matriz completa (uma linha por produto único).
+  const novaMatriz = grupos.map(function (g) {
+    const linha = new Array(totalColunas).fill('');
+    linha[0] = g.produto;                                  // A
+    linha[1] = g.un || '';                                 // B
+    linha[2] = g.novaBase;                                 // C
+    linha[3] = g.categoria || '';                           // D
+    linha[ESTOQUE_BARCODE_COLUMN - 1] = g.codigoBarras || ''; // E
+    linha[ESTOQUE_START_COLUMN - 1] = g.entradaTotal;        // G
+    return linha;
+  });
+
+  // Escreve tudo de uma vez (uma única chamada, em vez de célula por célula).
+  if (novaMatriz.length > 0) {
+    sheet.getRange(2, 1, novaMatriz.length, totalColunas).setValues(novaMatriz);
+  }
+
+  // Limpa o que sobrou das linhas E colunas antigas (a nova área é mais
+  // curta/estreita que a antiga), também em poucas chamadas.
+  const linhasSobrando = totalLinhasAntigas - novaMatriz.length;
+  if (linhasSobrando > 0) {
+    const primeiraLinhaSobrando = 2 + novaMatriz.length;
+    const colunasParaLimpar = Math.max(sheet.getLastColumn(), totalColunas);
+    sheet.getRange(primeiraLinhaSobrando, 1, linhasSobrando, colunasParaLimpar).clearContent();
+  }
+  const colunasSobrando = sheet.getLastColumn() - totalColunas;
+  if (colunasSobrando > 0 && novaMatriz.length > 0) {
+    sheet.getRange(2, totalColunas + 1, novaMatriz.length, colunasSobrando).clearContent();
+  }
+
+  Logger.log(
+    'Consolidação concluída. Produtos únicos: ' + novaMatriz.length +
+    ' (antes: ' + totalLinhasAntigas + ' linhas). Linhas duplicadas removidas: ' + linhasSobrando
+  );
+}
+
+/**
+ * FERRAMENTA DE REPARO — RODAR MANUALMENTE, UMA VEZ, PELO EDITOR DO APPS SCRIPT.
+ *
+ * Reduz as colunas de entrada de cada produto (G em diante) a uma ÚNICA
+ * coluna (G) com a soma de tudo que havia ali. Não perde nenhuma
+ * quantidade — só para de guardar o histórico transação-por-transação em
+ * dezenas/centenas de colunas (histórico que o app nunca chegou a exibir
+ * em lugar nenhum de qualquer forma).
+ *
+ * Rode esta função se a aba "Estoque" já ficou larga demais — por exemplo,
+ * depois de ter rodado uma versão anterior de consolidarProdutosDuplicadosEstoque()
+ * que ainda concatenava o histórico de entradas em várias colunas em vez de
+ * somar tudo numa só (foi exatamente essa largura excessiva que deixou as
+ * consultas de Estoque e Retirada muito lentas mesmo depois de reduzir o
+ * número de linhas duplicadas).
+ */
+function compactarEntradasEstoque() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(ESTOQUE_SHEET_NAME);
+  if (!sheet) throw new Error('Aba "' + ESTOQUE_SHEET_NAME + '" não encontrada na planilha.');
+
+  const lastRow = sheet.getLastRow();
+  const lastColumn = sheet.getLastColumn();
+  const entradaColumnCount = Math.max(lastColumn - ESTOQUE_START_COLUMN + 1, 0);
+
+  if (lastRow < 2 || entradaColumnCount <= 1) {
+    Logger.log('Nada para compactar: a aba já tem no máximo 1 coluna de entrada.');
+    return;
+  }
+
+  const rowCount = lastRow - 1;
+  const entradaValues = sheet.getRange(2, ESTOQUE_START_COLUMN, rowCount, entradaColumnCount).getValues();
+
+  const somaPorLinha = entradaValues.map(function (linha) {
+    const soma = linha.reduce(function (acc, v) { return acc + (Number(v) || 0); }, 0);
+    return [soma];
+  });
+
+  // Limpa TODAS as colunas de entrada antigas de uma vez, depois escreve só o total, numa única coluna (G).
+  sheet.getRange(2, ESTOQUE_START_COLUMN, rowCount, entradaColumnCount).clearContent();
+  sheet.getRange(2, ESTOQUE_START_COLUMN, rowCount, 1).setValues(somaPorLinha);
+
+  Logger.log(
+    'Compactação concluída. Colunas de entrada: ' + entradaColumnCount + ' → 1. Linhas processadas: ' + rowCount
+  );
+}
+
+/**
+ * Função auxiliar compartilhada pelas ferramentas de limpeza acima: lê a
+ * aba "Estoque" e agrupa as linhas por nome de produto (normalizado).
+ */
+function agruparDuplicatasEstoque_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(ESTOQUE_SHEET_NAME);
+  if (!sheet) throw new Error('Aba "' + ESTOQUE_SHEET_NAME + '" não encontrada na planilha.');
+
+  const lastProductRow = getLastRowInColumn(sheet, 1);
+  const gruposPorChave = {};
+  const ordem = [];
+
+  if (lastProductRow >= 2) {
+    const rowCount = lastProductRow - 1;
+    const lastColumn = sheet.getLastColumn();
+    const entradaColumnCount = Math.max(lastColumn - ESTOQUE_START_COLUMN + 1, 0);
+
+    const productNames = sheet.getRange(2, 1, rowCount, 1).getValues();
+    const units = sheet.getRange(2, 2, rowCount, 1).getValues();
+    const baseValues = sheet.getRange(2, 3, rowCount, 1).getValues();
+    const categories = sheet.getRange(2, 4, rowCount, 1).getValues();
+    const barcodes = sheet.getRange(2, ESTOQUE_BARCODE_COLUMN, rowCount, 1).getValues();
+    const entradaValues = entradaColumnCount > 0
+      ? sheet.getRange(2, ESTOQUE_START_COLUMN, rowCount, entradaColumnCount).getValues()
+      : [];
+
+    for (let i = 0; i < rowCount; i++) {
+      const produto = String(productNames[i][0] || '').trim();
+      if (!produto) continue;
+
+      const rowNumber = i + 2;
+      const un = String(units[i][0] || '').trim();
+      const base = Number(baseValues[i][0]) || 0;
+      const categoria = String(categories[i][0] || '').trim();
+      const codigoBarras = String(barcodes[i][0] || '').trim();
+
+      let entradaSomaDaLinha = 0;
+      for (let j = 0; j < entradaColumnCount; j++) {
+        entradaSomaDaLinha += Number(entradaValues[i][j]) || 0;
+      }
+
+      const key = produto.toLowerCase();
+      if (!gruposPorChave[key]) {
+        gruposPorChave[key] = {
+          produto: produto,
+          un: '',
+          categoria: '',
+          codigoBarras: '',
+          novaBase: 0,
+          entradaTotal: 0,
+          linhas: []
+        };
+        ordem.push(key);
+      }
+
+      const g = gruposPorChave[key];
+      g.novaBase += base;
+      g.entradaTotal += entradaSomaDaLinha;
+      if (!g.un && un) g.un = un;
+      if (!g.categoria && categoria) g.categoria = categoria;
+      if (!g.codigoBarras && codigoBarras) g.codigoBarras = codigoBarras;
+      g.linhas.push({ row: rowNumber });
+    }
+  }
+
+  const grupos = ordem.map(function (key) { return gruposPorChave[key]; });
+  const totalLinhasRemovidas = grupos.reduce(function (sum, g) { return sum + Math.max(g.linhas.length - 1, 0); }, 0);
+
+  return {
+    totalLinhas: lastProductRow >= 2 ? lastProductRow - 1 : 0,
+    grupos: grupos,
+    totalLinhasRemovidas: totalLinhasRemovidas
+  };
 }
 
 function doPost(e) {
@@ -325,13 +548,21 @@ function decrementEstoqueStock(sheet, row, qtyToRemove) {
 }
 
 /**
- * Grava entradas de material na aba "Estoque". Para cada item, a coluna de
- * destino é decidida individualmente pela LINHA daquele produto: começa em G
- * e avança até achar a primeira célula vazia NAQUELA linha (independente do
- * que outras linhas/produtos já têm preenchido). Produtos que ainda não
- * existem na coluna A são adicionados automaticamente. Quando o item chega
- * com uma categoria (só acontece ao cadastrar um material novo pelo app),
- * ela é gravada na coluna D.
+ * Grava entradas de material na aba "Estoque". Para cada item, a quantidade
+ * é SOMADA a um único total corrente na coluna G daquele produto — não é
+ * mais criada uma coluna nova a cada entrada registrada. Produtos que ainda
+ * não existem na coluna A são adicionados automaticamente. Quando o item
+ * chega com uma categoria (só acontece ao cadastrar um material novo pelo
+ * app), ela é gravada na coluna D.
+ *
+ * Antes, cada entrada abria uma coluna nova (G, H, I...) na linha do
+ * produto — depois de anos de uso (e mais ainda depois de consolidar linhas
+ * duplicadas, que juntava o histórico de várias linhas numa só), a aba
+ * "Estoque" podia acabar com centenas de colunas de largura. Como a
+ * planilha é uma grade retangular, isso deixava TODA consulta de estoque
+ * lenta, não só a do produto com histórico extenso. Somar num único total
+ * corrente mantém a aba com largura fixa (A até G) para sempre, não importa
+ * há quantos anos o Almoxarifado esteja em uso.
  */
 function handleEntradaMaterial(ss, items) {
   const sheet = ss.getSheetByName(ESTOQUE_SHEET_NAME);
@@ -358,8 +589,10 @@ function handleEntradaMaterial(ss, items) {
         sheet.getRange(row, 4).setValue(item.categoria);
       }
 
-      const targetColumn = getNextEmptyColumnInRow(sheet, row, ESTOQUE_START_COLUMN);
-      sheet.getRange(row, targetColumn).setValue(item.qtd != null ? item.qtd : "");
+      const entradaCell = sheet.getRange(row, ESTOQUE_START_COLUMN);
+      const totalAtual = Number(entradaCell.getValue()) || 0;
+      const qtdNova = item.qtd != null ? Number(item.qtd) || 0 : 0;
+      entradaCell.setValue(totalAtual + qtdNova);
     });
 
     return items.length;
@@ -413,24 +646,6 @@ function findRowByProductName(sheet, column, productName) {
 }
 
 /**
- * Retorna a primeira coluna, a partir de startColumn, que está vazia NA
- * LINHA informada — analisa só aquela linha, sem considerar o que outras
- * linhas/produtos têm preenchido nas mesmas colunas.
- */
-function getNextEmptyColumnInRow(sheet, row, startColumn) {
-  const lastColumn = Math.max(sheet.getLastColumn(), startColumn);
-  const numColsToCheck = lastColumn - startColumn + 1;
-  const values = sheet.getRange(row, startColumn, 1, numColsToCheck).getValues()[0];
-
-  for (let i = 0; i < values.length; i++) {
-    if (values[i] === "" || values[i] === null) {
-      return startColumn + i;
-    }
-  }
-  return startColumn + values.length;
-}
-
-/**
  * Atende requisições GET. Sem parâmetros, apenas confirma que o Web App está
  * no ar. Com ?action=estoque, retorna os níveis atuais de estoque calculados
  * a partir da aba "Estoque".
@@ -463,6 +678,17 @@ function doGet(e) {
  * devolve a categoria (coluna D) e o código de barras (coluna E), quando
  * preenchidos, para o app conseguir classificar na Consulta de Estoque e
  * identificar produtos automaticamente na leitura por código de barras.
+ *
+ * A aba "Estoque" acumulou, ao longo do tempo, várias linhas duplicadas para
+ * o mesmo produto (mesmo nome cadastrado mais de uma vez — em alguns casos,
+ * dezenas de vezes). Se cada linha virasse um item separado na resposta, o
+ * mesmo produto apareceria repetido várias vezes na Consulta de Estoque e no
+ * seletor de produtos da Retirada, cada aparição mostrando só uma fração da
+ * quantidade real, além de inflar bastante o tamanho da resposta. Por isso,
+ * linhas com o mesmo nome de produto (sem diferenciar maiúsculas/minúsculas
+ * ou espaços nas pontas) são agrupadas aqui: a quantidade total é a SOMA de
+ * todas as linhas duplicadas, e unidade/categoria/código de barras usam o
+ * primeiro valor não vazio encontrado entre elas.
  */
 function getEstoqueLevels() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -472,7 +698,8 @@ function getEstoqueLevels() {
   }
 
   const lastProductRow = getLastRowInColumn(sheet, 1);
-  const items = [];
+  const itemsByKey = {};
+  const order = [];
 
   if (lastProductRow >= 2) {
     const rowCount = lastProductRow - 1;
@@ -502,15 +729,21 @@ function getEstoqueLevels() {
         entradasSum += Number(entradaValues[i][j]) || 0;
       }
 
-      items.push({
-        produto: produto,
-        un: un,
-        categoria: categoria,
-        codigoBarras: codigoBarras,
-        total: base + entradasSum
-      });
+      const key = produto.toLowerCase();
+      if (!itemsByKey[key]) {
+        itemsByKey[key] = { produto: produto, un: un, categoria: categoria, codigoBarras: codigoBarras, total: 0 };
+        order.push(key);
+      }
+
+      const agg = itemsByKey[key];
+      agg.total += base + entradasSum;
+      if (!agg.un && un) agg.un = un;
+      if (!agg.categoria && categoria) agg.categoria = categoria;
+      if (!agg.codigoBarras && codigoBarras) agg.codigoBarras = codigoBarras;
     }
   }
+
+  const items = order.map(function (key) { return itemsByKey[key]; });
 
   return ContentService
     .createTextOutput(JSON.stringify({ status: "success", items: items }))
