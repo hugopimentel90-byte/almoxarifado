@@ -319,6 +319,14 @@
             <span class="menu-link-text">Liberação</span>
           </a>
         </li>
+        <li class="menu-item">
+          <a id="menuPontoPedido" class="menu-link" title="Ponto de Pedido">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+            </svg>
+            <span class="menu-link-text">Ponto de Pedido</span>
+          </a>
+        </li>
       </nav>
 
       <div class="sidebar-footer">
@@ -919,6 +927,48 @@
             <div class="kanban-column-body" id="kanbanColumnLiberados"></div>
           </div>
         </div>
+      </main>
+
+      <!-- ABA 6: PONTO DE PEDIDO (acesso restrito ao perfil administrador) -->
+      <main id="viewPontoPedido" class="view-content container hidden">
+        <header style="margin-bottom: 1.5rem;">
+          <div class="header-title-container">
+            <h1>Ponto de Pedido</h1>
+            <p>Acompanhe quais produtos estão perto (ou já na hora) de precisar de um novo pedido de compra</p>
+          </div>
+        </header>
+
+        <section class="table-card">
+          <div class="table-header">
+            <div class="table-title">Produtos por Categoria</div>
+            <div class="filter-group" style="min-width: 240px;">
+              <label for="pontoPedidoCategoryFilter">Categoria</label>
+              <select id="pontoPedidoCategoryFilter">
+                <option value="">Selecione uma categoria...</option>
+                <option value="Produto de limpeza">Produto de limpeza</option>
+                <option value="Escritório">Escritório</option>
+                <option value="Industrial">Industrial</option>
+                <option value="Prefeitura">Prefeitura</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Produto</th>
+                  <th>Quantidade em Estoque</th>
+                  <th>Ponto de Pedido</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="pontoPedidoTableBody">
+                <tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Selecione uma categoria para consultar</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
       </main>
 
     </div>

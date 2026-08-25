@@ -45,7 +45,7 @@ let entradaCustomCategories = {}; // Lembra a categoria escolhida para materiais
 let pendingCustomEntradaProductName = '';
 
 // Estado da Aba de Consulta de Estoque
-let stockData = []; // Armazena [{ produto, un, categoria, codigoBarras, total }] vindo da aba "Estoque"
+let stockData = []; // Armazena [{ produto, un, categoria, codigoBarras, pontoPedido, total }] vindo da aba "Estoque"
 let currentEstoqueCategory = "";
 let estoqueSearchQuery = "";
 let stockLevelsFetchPromise = null; // Promise da busca de estoque em andamento, para a tela de categoria poder aguardá-la
@@ -299,8 +299,9 @@ async function fetchDashboardData() {
 
 function switchTab(tabName) {
   // Reforço de segurança: visitante não tem acesso às abas de Retirada e Entrada,
-  // mesmo que algo tente disparar switchTab diretamente para elas.
-  if (currentUserRole === 'visitante' && (tabName === 'retirada' || tabName === 'entrada')) {
+  // nem à de Ponto de Pedido (só o perfil administrador), mesmo que algo
+  // tente disparar switchTab diretamente para elas.
+  if (currentUserRole === 'visitante' && (tabName === 'retirada' || tabName === 'entrada' || tabName === 'pontopedido')) {
     tabName = 'dashboard';
   }
 
@@ -309,22 +310,26 @@ function switchTab(tabName) {
   const menuEntrada = document.getElementById('menuEntrada');
   const menuEstoque = document.getElementById('menuEstoque');
   const menuLiberacao = document.getElementById('menuLiberacao');
+  const menuPontoPedido = document.getElementById('menuPontoPedido');
   const viewDashboard = document.getElementById('viewDashboard');
   const viewRetirada = document.getElementById('viewRetirada');
   const viewEntrada = document.getElementById('viewEntrada');
   const viewEstoque = document.getElementById('viewEstoque');
   const viewLiberacao = document.getElementById('viewLiberacao');
+  const viewPontoPedido = document.getElementById('viewPontoPedido');
 
   menuDashboard.classList.remove('active');
   menuRetirada.classList.remove('active');
   menuEntrada.classList.remove('active');
   menuEstoque.classList.remove('active');
   menuLiberacao.classList.remove('active');
+  menuPontoPedido.classList.remove('active');
   viewDashboard.classList.add('hidden');
   viewRetirada.classList.add('hidden');
   viewEntrada.classList.add('hidden');
   viewEstoque.classList.add('hidden');
   viewLiberacao.classList.add('hidden');
+  viewPontoPedido.classList.add('hidden');
 
   if (tabName === 'dashboard') {
     menuDashboard.classList.add('active');
@@ -351,6 +356,11 @@ function switchTab(tabName) {
     menuLiberacao.classList.add('active');
     viewLiberacao.classList.remove('hidden');
     fetchLiberacaoCards();
+  } else if (tabName === 'pontopedido') {
+    menuPontoPedido.classList.add('active');
+    viewPontoPedido.classList.remove('hidden');
+    stockLevelsFetchPromise = fetchStockLevels();
+    renderPontoPedidoTable();
   }
 }
 
@@ -2452,6 +2462,78 @@ function renderEstoqueTable() {
   });
 }
 
+// --- MÓDULO DE PONTO DE PEDIDO (ACESSO RESTRITO AO PERFIL ADMINISTRADOR) ---
+
+const PONTO_PEDIDO_YELLOW_MARGIN = 0.3; // 30% acima do Ponto de Pedido = status "Amarelo"
+
+function initializePontoPedidoModule() {
+  document.getElementById('pontoPedidoCategoryFilter').addEventListener('change', renderPontoPedidoTable);
+}
+
+/**
+ * Calcula o status de reposição de um produto a partir do estoque atual e
+ * do Ponto de Pedido (preenchido manualmente na aba "Estoque", coluna F):
+ *   - "vermelho": estoque já está no Ponto de Pedido ou abaixo — hora de encomendar
+ *   - "amarelo": estoque está até 30% acima do Ponto de Pedido — perto de precisar pedir
+ *   - "verde": estoque está confortavelmente acima do Ponto de Pedido
+ *   - null: produto ainda não tem Ponto de Pedido definido na planilha
+ */
+function getPontoPedidoStatus(total, pontoPedido) {
+  if (!pontoPedido || pontoPedido <= 0) return null;
+  if (total <= pontoPedido) return 'vermelho';
+  if (total <= pontoPedido * (1 + PONTO_PEDIDO_YELLOW_MARGIN)) return 'amarelo';
+  return 'verde';
+}
+
+function renderPontoPedidoTable() {
+  const tbody = document.getElementById('pontoPedidoTableBody');
+  const categoriaEl = document.getElementById('pontoPedidoCategoryFilter');
+  const categoria = categoriaEl ? categoriaEl.value : '';
+  tbody.innerHTML = '';
+
+  if (!categoria) {
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Selecione uma categoria para consultar</td></tr>`;
+    return;
+  }
+
+  let items = stockData.filter(item =>
+    getCategoryForProduct(item.produto).toLowerCase() === categoria.toLowerCase()
+  );
+  items = items.slice().sort((a, b) => a.produto.localeCompare(b.produto));
+
+  if (items.length === 0) {
+    const message = stockLevelsLoadFailed
+      ? 'Não foi possível carregar os dados do estoque. Verifique sua conexão e tente novamente.'
+      : 'Nenhum produto encontrado nesta categoria';
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: ${stockLevelsLoadFailed ? 'var(--color-danger)' : 'var(--text-secondary)'}; padding: 2rem;">${message}</td></tr>`;
+    return;
+  }
+
+  items.forEach(item => {
+    const tr = document.createElement('tr');
+    const status = getPontoPedidoStatus(item.total, item.pontoPedido);
+
+    let statusHtml;
+    if (status === 'vermelho') {
+      statusHtml = '<span class="badge badge-danger">Encomendar</span>';
+    } else if (status === 'amarelo') {
+      statusHtml = '<span class="badge badge-pending">Próximo</span>';
+    } else if (status === 'verde') {
+      statusHtml = '<span class="badge badge-success">Ok</span>';
+    } else {
+      statusHtml = '<span style="color: var(--text-muted); font-size: 0.8125rem;">Sem ponto definido</span>';
+    }
+
+    tr.innerHTML = `
+      <td style="font-weight: 600; color: var(--text-primary);">${item.produto}</td>
+      <td style="font-weight: 500;">${formatDataLabelValue(item.total)}</td>
+      <td style="color: var(--text-secondary);">${item.pontoPedido ? formatDataLabelValue(item.pontoPedido) : '—'}</td>
+      <td>${statusHtml}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
 async function fetchStockLevels() {
   if (!SCRIPT_URL || SCRIPT_URL.trim() === "") {
     showToast("Configure a SCRIPT_URL para consultar o estoque.", "warning");
@@ -2488,6 +2570,10 @@ async function fetchStockLevels() {
   // Se já houver uma categoria aberta, atualiza a tabela com os dados recém-carregados
   if (currentEstoqueCategory) {
     renderEstoqueTable();
+  }
+  const pontoPedidoCategoryEl = document.getElementById('pontoPedidoCategoryFilter');
+  if (pontoPedidoCategoryEl && pontoPedidoCategoryEl.value) {
+    renderPontoPedidoTable();
   }
 }
 
@@ -3263,6 +3349,7 @@ function initEventListeners() {
   document.getElementById('menuEntrada').addEventListener('click', () => switchTab('entrada'));
   document.getElementById('menuEstoque').addEventListener('click', () => switchTab('estoque'));
   document.getElementById('menuLiberacao').addEventListener('click', () => switchTab('liberacao'));
+  document.getElementById('menuPontoPedido').addEventListener('click', () => switchTab('pontopedido'));
 
   // Botão de Sair: revoga o acesso liberado neste navegador e volta para a tela de senha
   document.getElementById('btnLogout').addEventListener('click', handleLogout);
@@ -3365,16 +3452,17 @@ function initAccessGate() {
 
 /**
  * Aplica as restrições de visualização do papel "visitante": some com as
- * abas de Retirada e Entrada no menu lateral, esconde o painel de Consumo
- * Limite por Setor no Dashboard, e troca o cabeçalho da coluna de
- * quantidade na Consulta de Estoque (a própria renderEstoqueTable troca o
- * valor de cada linha por um status Disponível/Esgotado).
+ * abas de Retirada, Entrada e Ponto de Pedido no menu lateral, esconde o
+ * painel de Consumo Limite por Setor no Dashboard, e troca o cabeçalho da
+ * coluna de quantidade na Consulta de Estoque (a própria renderEstoqueTable
+ * troca o valor de cada linha por um status Disponível/Esgotado).
  */
 function applyRoleRestrictions() {
   const isVisitor = currentUserRole === 'visitante';
 
   document.getElementById('menuRetirada').closest('li').classList.toggle('hidden', isVisitor);
   document.getElementById('menuEntrada').closest('li').classList.toggle('hidden', isVisitor);
+  document.getElementById('menuPontoPedido').closest('li').classList.toggle('hidden', isVisitor);
 
   const consumoSection = document.getElementById('consumoLimiteSetorSection');
   if (consumoSection) {
@@ -3407,6 +3495,7 @@ function initApp() {
   initializeEntradaModule();
   initializeEstoqueModule();
   initializeLiberacaoModule();
+  initializePontoPedidoModule();
   initSidebarToggle();
   fetchDashboardData();
 }

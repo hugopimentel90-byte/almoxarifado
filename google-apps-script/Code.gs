@@ -28,7 +28,13 @@
  *   E - Código de Barras do produto (preenchido manualmente na planilha).
  *       Usado pela leitura via leitor de código de barras na tela de Retirada
  *       para identificar automaticamente o produto correspondente.
- *   F - não utilizada por este formulário
+ *   F - Ponto de Pedido: quantidade mínima abaixo da qual o comprador deve
+ *       disparar um novo pedido de compra. Preenchido manualmente na
+ *       planilha (não é editável pelo app). Usado pela página "Ponto de
+ *       Pedido" (acesso restrito ao perfil administrador) para sinalizar o
+ *       status de cada produto: vermelho quando o estoque já está no ponto
+ *       de pedido ou abaixo, amarelo quando está até 30% acima dele, e
+ *       verde quando está confortavelmente acima.
  *   G - total corrente de entradas: cada envio do formulário de Entrada SOMA
  *       a quantidade aqui (não abre mais uma coluna nova a cada entrada —
  *       isso mantém a aba com largura fixa para sempre, independente de há
@@ -88,6 +94,7 @@ const REGISTRO_SHEET_NAME = "Registro";
 const ESTOQUE_SHEET_NAME = "Estoque";
 const ESTOQUE_START_COLUMN = 7; // coluna G
 const ESTOQUE_BARCODE_COLUMN = 5; // coluna E
+const ESTOQUE_REORDER_POINT_COLUMN = 6; // coluna F
 
 const LIBERACAO_SHEET_NAME = "Liberacao";
 const LIBERACAO_DRIVE_FOLDER_NAME = "Almoxarifado - Documentos de Liberação";
@@ -187,6 +194,7 @@ function consolidarProdutosDuplicadosEstoque() {
     linha[2] = g.novaBase;                                 // C
     linha[3] = g.categoria || '';                           // D
     linha[ESTOQUE_BARCODE_COLUMN - 1] = g.codigoBarras || ''; // E
+    linha[ESTOQUE_REORDER_POINT_COLUMN - 1] = g.pontoPedido || ''; // F
     linha[ESTOQUE_START_COLUMN - 1] = g.entradaTotal;        // G
     return linha;
   });
@@ -285,6 +293,7 @@ function agruparDuplicatasEstoque_() {
     const baseValues = sheet.getRange(2, 3, rowCount, 1).getValues();
     const categories = sheet.getRange(2, 4, rowCount, 1).getValues();
     const barcodes = sheet.getRange(2, ESTOQUE_BARCODE_COLUMN, rowCount, 1).getValues();
+    const reorderPoints = sheet.getRange(2, ESTOQUE_REORDER_POINT_COLUMN, rowCount, 1).getValues();
     const entradaValues = entradaColumnCount > 0
       ? sheet.getRange(2, ESTOQUE_START_COLUMN, rowCount, entradaColumnCount).getValues()
       : [];
@@ -298,6 +307,7 @@ function agruparDuplicatasEstoque_() {
       const base = Number(baseValues[i][0]) || 0;
       const categoria = String(categories[i][0] || '').trim();
       const codigoBarras = String(barcodes[i][0] || '').trim();
+      const pontoPedido = Number(reorderPoints[i][0]) || 0;
 
       let entradaSomaDaLinha = 0;
       for (let j = 0; j < entradaColumnCount; j++) {
@@ -311,6 +321,7 @@ function agruparDuplicatasEstoque_() {
           un: '',
           categoria: '',
           codigoBarras: '',
+          pontoPedido: 0,
           novaBase: 0,
           entradaTotal: 0,
           linhas: []
@@ -324,6 +335,7 @@ function agruparDuplicatasEstoque_() {
       if (!g.un && un) g.un = un;
       if (!g.categoria && categoria) g.categoria = categoria;
       if (!g.codigoBarras && codigoBarras) g.codigoBarras = codigoBarras;
+      if (!g.pontoPedido && pontoPedido) g.pontoPedido = pontoPedido;
       g.linhas.push({ row: rowNumber });
     }
   }
@@ -711,6 +723,7 @@ function getEstoqueLevels() {
     const baseValues = sheet.getRange(2, 3, rowCount, 1).getValues();
     const categories = sheet.getRange(2, 4, rowCount, 1).getValues();
     const barcodes = sheet.getRange(2, ESTOQUE_BARCODE_COLUMN, rowCount, 1).getValues();
+    const reorderPoints = sheet.getRange(2, ESTOQUE_REORDER_POINT_COLUMN, rowCount, 1).getValues();
     const entradaValues = entradaColumnCount > 0
       ? sheet.getRange(2, ESTOQUE_START_COLUMN, rowCount, entradaColumnCount).getValues()
       : [];
@@ -723,6 +736,7 @@ function getEstoqueLevels() {
       const base = Number(baseValues[i][0]) || 0;
       const categoria = String(categories[i][0] || "").trim();
       const codigoBarras = String(barcodes[i][0] || "").trim();
+      const pontoPedido = Number(reorderPoints[i][0]) || 0;
 
       let entradasSum = 0;
       for (let j = 0; j < entradaColumnCount; j++) {
@@ -731,7 +745,7 @@ function getEstoqueLevels() {
 
       const key = produto.toLowerCase();
       if (!itemsByKey[key]) {
-        itemsByKey[key] = { produto: produto, un: un, categoria: categoria, codigoBarras: codigoBarras, total: 0 };
+        itemsByKey[key] = { produto: produto, un: un, categoria: categoria, codigoBarras: codigoBarras, pontoPedido: 0, total: 0 };
         order.push(key);
       }
 
@@ -740,6 +754,7 @@ function getEstoqueLevels() {
       if (!agg.un && un) agg.un = un;
       if (!agg.categoria && categoria) agg.categoria = categoria;
       if (!agg.codigoBarras && codigoBarras) agg.codigoBarras = codigoBarras;
+      if (!agg.pontoPedido && pontoPedido) agg.pontoPedido = pontoPedido;
     }
   }
 
