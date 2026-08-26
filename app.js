@@ -363,8 +363,7 @@ function switchTab(tabName) {
   } else if (tabName === 'pontopedido') {
     menuPontoPedido.classList.add('active');
     viewPontoPedido.classList.remove('hidden');
-    stockLevelsFetchPromise = fetchStockLevels();
-    renderPontoPedidoTable();
+    carregarPontoPedidoDados();
   }
 }
 
@@ -2499,6 +2498,44 @@ function getPontoPedidoStatus(total, pontoPedido) {
   return 'verde';
 }
 
+/**
+ * Busca em paralelo os níveis de estoque (aba "Estoque") e os dados de
+ * fornecedor (aba "Demanda"), aplica o Ponto de Pedido da Demanda em cima
+ * do estoque, e então desenha a tabela — usado ao abrir a aba Ponto de Pedido.
+ */
+async function carregarPontoPedidoDados() {
+  stockLevelsFetchPromise = fetchStockLevels();
+  await Promise.all([stockLevelsFetchPromise, fetchDemandaData()]);
+  aplicarPontoPedidoDaDemanda();
+  renderPontoPedidoTable();
+}
+
+/**
+ * Sobrepõe em stockData o Ponto de Pedido cadastrado na coluna B da aba
+ * "Demanda" (casando pelo nome do produto), quando existir. Isso permite
+ * cadastrar o Ponto de Pedido só na aba Demanda — sem precisar duplicar o
+ * mesmo valor manualmente na coluna F da aba Estoque. Quando o produto não
+ * tem uma linha correspondente na Demanda, o valor da aba Estoque (se
+ * houver) continua valendo normalmente.
+ */
+function aplicarPontoPedidoDaDemanda() {
+  if (!Array.isArray(demandaData) || demandaData.length === 0) return;
+
+  const pontoPedidoPorNome = {};
+  demandaData.forEach(d => {
+    if (d.material && d.pontoPedido > 0) {
+      pontoPedidoPorNome[d.material.toLowerCase()] = d.pontoPedido;
+    }
+  });
+
+  stockData.forEach(item => {
+    const pontoDaDemanda = pontoPedidoPorNome[item.produto.toLowerCase()];
+    if (pontoDaDemanda) {
+      item.pontoPedido = pontoDaDemanda;
+    }
+  });
+}
+
 function renderPontoPedidoTable() {
   const tbody = document.getElementById('pontoPedidoTableBody');
   const categoriaEl = document.getElementById('pontoPedidoCategoryFilter');
@@ -3052,6 +3089,7 @@ async function fetchStockLevels() {
   }
   const pontoPedidoCategoryEl = document.getElementById('pontoPedidoCategoryFilter');
   if (pontoPedidoCategoryEl && pontoPedidoCategoryEl.value) {
+    aplicarPontoPedidoDaDemanda();
     renderPontoPedidoTable();
   }
 }
