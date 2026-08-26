@@ -51,6 +51,10 @@ let estoqueSearchQuery = "";
 let stockLevelsFetchPromise = null; // Promise da busca de estoque em andamento, para a tela de categoria poder aguardá-la
 let stockLevelsLoadFailed = false; // true quando a última busca de estoque falhou (para não confundir com "categoria vazia")
 
+// Estado do Pedido de Obtenção (aba Ponto de Pedido)
+let demandaData = []; // [{ material, pontoPedido, unidade, categoria, descricaoFornecedor, qtdMinima, multiplicador, valorUnitario }] vindo da aba "Demanda"
+let pedidoObtencaoItems = []; // Itens candidatos ao pedido atual: { produto, estoqueAtual, pontoPedido, demanda, selecionado }
+
 // Estado da Aba de Liberação de Documentos
 const LIBERACAO_COLUMNS = ['Setor', 'Encarregado', 'Imediato', 'Liberados'];
 let liberacaoCards = [];
@@ -2468,6 +2472,16 @@ const PONTO_PEDIDO_YELLOW_MARGIN = 0.3; // 30% acima do Ponto de Pedido = status
 
 function initializePontoPedidoModule() {
   document.getElementById('pontoPedidoCategoryFilter').addEventListener('change', renderPontoPedidoTable);
+
+  document.getElementById('btnAbrirPedidoObtencao').addEventListener('click', abrirPedidoObtencaoModal);
+  document.getElementById('btnCancelPedidoObtencao').addEventListener('click', fecharPedidoObtencaoModal);
+  document.getElementById('pedidoObtencaoModal').addEventListener('click', (e) => {
+    if (e.target.id === 'pedidoObtencaoModal') {
+      fecharPedidoObtencaoModal();
+    }
+  });
+  document.getElementById('btnBaixarPedidoObtencaoPDF').addEventListener('click', handleBaixarPedidoObtencaoPDF);
+  document.getElementById('btnEnviarPedidoObtencaoEmail').addEventListener('click', handleEnviarPedidoObtencaoEmail);
 }
 
 /**
@@ -2532,6 +2546,471 @@ function renderPontoPedidoTable() {
     `;
     tbody.appendChild(tr);
   });
+}
+
+// --- PEDIDO DE OBTENÇÃO (produtos que atingiram o Ponto de Pedido) ---
+
+/**
+ * Busca a aba "Demanda" (dados de fornecedor usados para montar o Pedido de
+ * Obtenção). Se a aba ainda não existir ou a busca falhar, fica com uma
+ * lista vazia — os produtos aparecem na lista de seleção marcados como
+ * "sem dados de fornecedor", sem travar o resto da funcionalidade.
+ */
+async function fetchDemandaData() {
+  if (!SCRIPT_URL || SCRIPT_URL.trim() === "") {
+    demandaData = [];
+    return;
+  }
+
+  try {
+    const response = await fetch(`${SCRIPT_URL}?action=demanda&t=${new Date().getTime()}`, {
+      method: 'GET',
+      cache: 'no-store'
+    });
+
+    if (!response.ok) {
+      throw new Error(`Falha na requisição HTTP: ${response.status} ${response.statusText}`);
+    }
+
+    const resData = await response.json();
+    if (resData && resData.status === 'success' && Array.isArray(resData.items)) {
+      demandaData = resData.items;
+    } else {
+      throw new Error(resData.message || "Erro desconhecido ao consultar a aba Demanda.");
+    }
+  } catch (error) {
+    console.error("Erro ao consultar dados de Demanda:", error);
+    demandaData = [];
+  }
+}
+
+/**
+ * Abre o modal de Pedido de Obtenção: junta todos os produtos com status
+ * "vermelho" (em QUALQUER categoria, não só a filtrada na tela) com os
+ * dados de fornecedor da aba "Demanda", casando pelo nome do produto.
+ */
+async function abrirPedidoObtencaoModal() {
+  if (stockLevelsFetchPromise) {
+    await stockLevelsFetchPromise;
+  }
+
+  showLoading(true);
+  await fetchDemandaData();
+  showLoading(false);
+
+  const redItems = stockData.filter(item => getPontoPedidoStatus(item.total, item.pontoPedido) === 'vermelho');
+
+  if (redItems.length === 0) {
+    showToast("Nenhum produto atingiu o Ponto de Pedido no momento.", "success");
+    return;
+  }
+
+  pedidoObtencaoItems = redItems
+    .map(item => {
+      const demanda = demandaData.find(d => d.material.toLowerCase() === item.produto.toLowerCase()) || null;
+      return {
+        produto: item.produto,
+        estoqueAtual: item.total,
+        pontoPedido: item.pontoPedido,
+        demanda: demanda,
+        selecionado: !!demanda
+      };
+    })
+    .sort((a, b) => a.produto.localeCompare(b.produto));
+
+  document.getElementById('pedidoObtencaoNumero').value = '';
+  document.getElementById('pedidoObtencaoEmails').value = '';
+  document.getElementById('pedidoObtencaoError').classList.add('hidden');
+
+  renderPedidoObtencaoItemsList();
+  document.getElementById('pedidoObtencaoModal').classList.remove('hidden');
+}
+
+function fecharPedidoObtencaoModal() {
+  document.getElementById('pedidoObtencaoModal').classList.add('hidden');
+  pedidoObtencaoItems = [];
+}
+
+function renderPedidoObtencaoItemsList() {
+  const container = document.getElementById('pedidoObtencaoItemsList');
+  container.innerHTML = '';
+
+  pedidoObtencaoItems.forEach((item, index) => {
+    const row = document.createElement('div');
+    row.className = 'pedido-obtencao-item-row' + (item.demanda ? '' : ' pedido-obtencao-item-row--disabled');
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = item.selecionado;
+    checkbox.disabled = !item.demanda;
+    checkbox.addEventListener('change', (e) => {
+      pedidoObtencaoItems[index].selecionado = e.target.checked;
+    });
+    row.appendChild(checkbox);
+
+    const info = document.createElement('div');
+    let metaHtml = `Estoque atual: ${formatDataLabelValue(item.estoqueAtual)} · Ponto de Pedido: ${formatDataLabelValue(item.pontoPedido)}`;
+    if (item.demanda) {
+      metaHtml += ` · Fornecedor: ${item.demanda.descricaoFornecedor || '—'}`;
+    }
+    info.innerHTML = `
+      <div class="pedido-obtencao-item-name">${item.produto}</div>
+      <div class="pedido-obtencao-item-meta">${metaHtml}</div>
+      ${!item.demanda ? '<div class="pedido-obtencao-item-warning">Sem dados de fornecedor cadastrados na aba Demanda — não pode entrar no pedido</div>' : ''}
+    `;
+    row.appendChild(info);
+
+    container.appendChild(row);
+  });
+}
+
+function formatCurrencyBRL(value) {
+  return (Number(value) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+/**
+ * Valida os campos do modal (número do pedido + ao menos 1 item
+ * selecionado com dados de fornecedor) antes de gerar o PDF.
+ * Retorna a lista de itens selecionados, ou null se inválido (já mostra o erro).
+ */
+function validarESelecionarItensPedidoObtencao() {
+  const errorEl = document.getElementById('pedidoObtencaoError');
+  errorEl.classList.add('hidden');
+
+  const numero = document.getElementById('pedidoObtencaoNumero').value.trim();
+  if (!numero) {
+    errorEl.textContent = 'Informe o número do Pedido de Obtenção.';
+    errorEl.classList.remove('hidden');
+    return null;
+  }
+
+  const itensSelecionados = pedidoObtencaoItems.filter(item => item.selecionado && item.demanda);
+  if (itensSelecionados.length === 0) {
+    errorEl.textContent = 'Selecione pelo menos um produto com dados de fornecedor cadastrados.';
+    errorEl.classList.remove('hidden');
+    return null;
+  }
+
+  return { numero, itensSelecionados };
+}
+
+/**
+ * Monta o PDF do Pedido de Obtenção, replicando o modelo padrão da BFLa:
+ * cabeçalho, seção 1 (contratação), seção 2 (tabela de materiais, a única
+ * parte com dados dinâmicos), e as seções 3 a 7 como texto fixo (o mesmo
+ * documento em branco que já é usado hoje, pra não precisar anexar à mão).
+ */
+function gerarPedidoObtencaoDoc(itensSelecionados, numero) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const marginX = 14;
+  const anoAtual = new Date().getFullYear();
+
+  function drawCheckbox(x, y, size = 4) {
+    doc.rect(x, y - size + 1, size, size);
+  }
+
+  function centeredText(text, y, size = 11, bold = false) {
+    doc.setFontSize(size);
+    doc.setFont('helvetica', bold ? 'bold' : 'normal');
+    doc.text(text, pageWidth / 2, y, { align: 'center' });
+  }
+
+  function sectionLabel(text, y) {
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    doc.text(text, marginX, y);
+  }
+
+  function normalText(text, x, y, size = 9.5) {
+    doc.setFontSize(size);
+    doc.setFont('helvetica', 'normal');
+    doc.text(text, x, y);
+  }
+
+  function pageFooter(label) {
+    doc.setFontSize(8);
+    doc.setTextColor(100);
+    doc.text(label, pageWidth / 2, pageHeight - 10, { align: 'center' });
+    doc.setTextColor(0);
+  }
+
+  // ===== PÁGINA 1 =====
+  centeredText('MARINHA DO BRASIL', 15, 12, true);
+  centeredText('BASE FLUVIAL DE LADÁRIO', 21, 10, true);
+  centeredText(`Pedido de Obtenção n° ${numero}`, 30, 11, true);
+
+  let y = 40;
+  sectionLabel('1. CONTRATAÇÃO (MATERIAL/SERVIÇO)', y);
+  y += 7;
+  normalText('JUSTIFICATIVA/APLICAÇÃO: Aquisição de material para o almoxarifado da BFLa.', marginX, y);
+  y += 8;
+
+  sectionLabel('2. DESCRIÇÃO DOS MATERIAIS/SERVIÇOS E CUSTO ESTIMADO', y);
+  y += 4;
+
+  let totalGeral = 0;
+  const tableBody = itensSelecionados.map((item, i) => {
+    const d = item.demanda;
+    const qtd = (d.qtdMinima || 0) * (d.multiplicador || 0);
+    const total = qtd * (d.valorUnitario || 0);
+    totalGeral += total;
+    return [
+      String(i + 1),
+      d.descricaoFornecedor || item.produto,
+      d.unidade || '',
+      formatDataLabelValue(qtd),
+      formatCurrencyBRL(d.valorUnitario || 0),
+      formatCurrencyBRL(total)
+    ];
+  });
+
+  doc.autoTable({
+    startY: y,
+    head: [['ITEM', 'DESCRIÇÃO', 'UF', 'QTD', 'VALOR (UN)', 'TOTAL']],
+    body: tableBody,
+    styles: { font: 'helvetica', fontSize: 8.5, cellPadding: 2, valign: 'middle' },
+    headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: 'bold', halign: 'center' },
+    columnStyles: {
+      0: { cellWidth: 12, halign: 'center' },
+      2: { cellWidth: 14, halign: 'center' },
+      3: { cellWidth: 18, halign: 'center' },
+      4: { cellWidth: 26, halign: 'right' },
+      5: { cellWidth: 28, halign: 'right' }
+    },
+    foot: [['', '', '', '', 'TOTAL', formatCurrencyBRL(totalGeral)]],
+    footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold', halign: 'right' }
+  });
+
+  y = doc.lastAutoTable.finalY + 10;
+
+  sectionLabel('3. LICITADO', y);
+  y += 7;
+  drawCheckbox(marginX, y);
+  normalText('SIM: Pregão Eletrônico ____________________', marginX + 6, y);
+  y += 7;
+  drawCheckbox(marginX, y);
+  normalText('NÃO:', marginX + 6, y);
+  y += 10;
+  normalText(`Data:____/_____/${anoAtual}.`, pageWidth - marginX - 40, y);
+  y += 16;
+
+  normalText('_______________________', marginX, y);
+  y += 5;
+  normalText('ASSINATURA E CARIMBO DO RESPONSÁVEL', marginX, y);
+  y += 4.5;
+  normalText('SETOR REQUISITANTE', marginX, y);
+  y += 12;
+
+  normalText('______________________', marginX, y);
+  y += 5;
+  normalText('ASSINATURA E CARIMBO DO RESPONSÁVEL', marginX, y);
+  y += 4.5;
+  normalText('DIVISÃO DE OBTENÇÃO', marginX, y);
+  y += 10;
+
+  normalText('Enquadramento: (Somente nas hipóteses de dispensa/inexigibilidade)', marginX, y, 8.5);
+  pageFooter('1 - 3');
+
+  // ===== PÁGINA 2 =====
+  doc.addPage();
+  y = 20;
+
+  sectionLabel('4. ESTOQUE (SOMENTE EM CASO DE MATERIAIS)', y);
+  y += 12;
+  drawCheckbox(marginX, y);
+  normalText('SIM – Justificativa: ________________________________________________', marginX + 6, y);
+  y += 7;
+  drawCheckbox(marginX, y);
+  normalText('NÃO', marginX + 6, y);
+  y += 10;
+  normalText(`Data:____/_____/${anoAtual}.`, pageWidth - marginX - 40, y);
+  y += 16;
+  normalText('_________________________________________', marginX, y);
+  y += 5;
+  normalText('ASSINATURA E CARIMBO DO RESPONSÁVEL', marginX, y);
+  y += 4.5;
+  normalText('DIVISÃO DE MATERIAL', marginX, y);
+  y += 10;
+
+  sectionLabel('5. DISPONIBILIDADE DE RECURSOS', y);
+  y += 4;
+  doc.autoTable({
+    startY: y,
+    head: [['Gestão', 'Fonte', 'Prog. Trab.', 'E.D DISP.', 'E.D APLIC.', 'PI']],
+    body: [['7', '', '', '', '', '']],
+    styles: { font: 'helvetica', fontSize: 9, cellPadding: 3, halign: 'center' },
+    headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: 'bold' }
+  });
+  y = doc.lastAutoTable.finalY + 8;
+
+  drawCheckbox(marginX, y);
+  normalText('NÃO: ___________________________________________________________', marginX + 6, y);
+  y += 12;
+  normalText(`Data:____/_____/${anoAtual}.`, pageWidth - marginX - 40, y);
+  y += 16;
+
+  normalText('_________________________________________', marginX, y);
+  y += 5;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('ALLEX CAMPOS CARDIANO', marginX, y);
+  y += 4.5;
+  normalText('Capitão-Tenente (IM)', marginX, y);
+  y += 4.5;
+  normalText('Agente Financeiro', marginX, y);
+  y += 10;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('Ratificação:', marginX, y);
+  y += 10;
+  normalText(`Data:____/_____/${anoAtual}.`, pageWidth - marginX - 40, y);
+  y += 16;
+
+  normalText('_________________________________________', marginX, y);
+  y += 5;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('JOÃO PAULO DE TARSO FERREIRA', marginX, y);
+  y += 4.5;
+  normalText('Capitão de Fragata', marginX, y);
+  y += 4.5;
+  normalText('Agente Fiscal', marginX, y);
+  y += 10;
+
+  sectionLabel('6. AUTORIZAÇÃO', y);
+  y += 8;
+  ['DISPENSA ELETRÔNICA', 'LICITAR/ADERIR (ARP)', 'OUTRAS HIPÓTESES:___________________', 'CONFECCIONAR SOLEMP (Itens licitados)', 'NÃO AUTORIZO'].forEach(op => {
+    drawCheckbox(marginX, y);
+    normalText(op, marginX + 6, y);
+    y += 7;
+  });
+  y += 3;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('Despacho:', marginX, y);
+  y += 6;
+  drawCheckbox(marginX, y);
+  const despachoLines = doc.splitTextToSize(
+    'Determino a Seção de Finanças reservar o recurso (item 5) para custear a demanda apresentada.',
+    pageWidth - marginX * 2 - 8
+  );
+  normalText(despachoLines, marginX + 6, y);
+  y += despachoLines.length * 4.5 + 6;
+  normalText(`Data:____/_____/${anoAtual}.`, pageWidth - marginX - 40, y);
+  y += 16;
+  normalText('________________________________', marginX, y);
+
+  pageFooter('2 - 3');
+
+  // ===== PÁGINA 3 =====
+  doc.addPage();
+  y = 20;
+  centeredText('LEONARDO ASSÁ GALLEGO SOARES', y, 10, true);
+  y += 5;
+  centeredText('Capitão de Mar e Guerra (EN)', y, 9.5, false);
+  y += 5;
+  centeredText('Comandante', y, 9.5, false);
+  y += 10;
+
+  sectionLabel('7. RESERVA DE RECURSOS', y);
+  y += 8;
+  const reservaLines = doc.splitTextToSize(
+    'Após determinação do Ordenador de Despesas o recurso será reservado conforme dados constantes no item 5.',
+    pageWidth - marginX * 2
+  );
+  normalText(reservaLines, marginX, y);
+  y += reservaLines.length * 4.5 + 10;
+  normalText(`Data:____/_____/${anoAtual}.`, pageWidth - marginX - 40, y);
+  y += 16;
+
+  normalText('_________________________________________', marginX, y);
+  y += 5;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('ALLEX CAMPOS CARDIANO', marginX, y);
+  y += 4.5;
+  normalText('Capitão-Tenente (IM)', marginX, y);
+  y += 4.5;
+  normalText('Agente Financeiro', marginX, y);
+
+  pageFooter('3 - 3');
+
+  return { doc, totalGeral };
+}
+
+function handleBaixarPedidoObtencaoPDF() {
+  const validado = validarESelecionarItensPedidoObtencao();
+  if (!validado) return;
+
+  const { doc } = gerarPedidoObtencaoDoc(validado.itensSelecionados, validado.numero);
+  const numeroSeguro = validado.numero.replace(/[^a-zA-Z0-9]+/g, '_');
+  doc.save(`Pedido_de_Obtencao_${numeroSeguro}.pdf`);
+}
+
+async function handleEnviarPedidoObtencaoEmail() {
+  const validado = validarESelecionarItensPedidoObtencao();
+  if (!validado) return;
+
+  const errorEl = document.getElementById('pedidoObtencaoError');
+  const emailsRaw = document.getElementById('pedidoObtencaoEmails').value.trim();
+  const destinatarios = emailsRaw.split(',').map(e => e.trim()).filter(e => e);
+
+  if (destinatarios.length === 0) {
+    errorEl.textContent = 'Informe pelo menos um e-mail de destinatário.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  if (!SCRIPT_URL || SCRIPT_URL.trim() === "") {
+    showToast("Configure a SCRIPT_URL para enviar o e-mail.", "warning");
+    return;
+  }
+
+  const { doc } = gerarPedidoObtencaoDoc(validado.itensSelecionados, validado.numero);
+  const base64 = doc.output('datauristring').split(',')[1];
+  const numeroSeguro = validado.numero.replace(/[^a-zA-Z0-9]+/g, '_');
+
+  const btnEnviar = document.getElementById('btnEnviarPedidoObtencaoEmail');
+  setButtonProcessing(btnEnviar, 'Enviando...');
+
+  try {
+    const response = await fetch(SCRIPT_URL, {
+      method: 'POST',
+      mode: 'cors',
+      headers: {
+        'Content-Type': 'text/plain',
+      },
+      body: JSON.stringify({
+        tipo: 'enviar_pedido_obtencao',
+        destinatarios: destinatarios,
+        assunto: `Pedido de Obtenção ${validado.numero} — Reposição de Estoque`,
+        corpo: `Segue em anexo o Pedido de Obtenção nº ${validado.numero} para reposição dos itens que atingiram o Ponto de Pedido no Almoxarifado.`,
+        arquivo: {
+          nome: `Pedido_de_Obtencao_${numeroSeguro}.pdf`,
+          mimeType: 'application/pdf',
+          base64: base64
+        }
+      })
+    });
+
+    const resData = await response.json();
+    if (resData && resData.status === 'success') {
+      showToast("Pedido de Obtenção enviado por e-mail!", "success");
+      fecharPedidoObtencaoModal();
+    } else {
+      throw new Error(resData.message || "Erro desconhecido ao enviar o e-mail.");
+    }
+  } catch (error) {
+    console.error("Erro ao enviar Pedido de Obtenção por e-mail:", error);
+    errorEl.textContent = error.message || "Erro ao enviar o e-mail. Tente novamente.";
+    errorEl.classList.remove('hidden');
+  } finally {
+    clearButtonProcessing(btnEnviar);
+  }
 }
 
 async function fetchStockLevels() {

@@ -102,6 +102,21 @@ const LIBERACAO_ENCARREGADO_PASSWORD = "encarregado321";
 const LIBERACAO_IMEDIATO_PASSWORD = "imediato321";
 
 /**
+ * Aba "Demanda" — dados de fornecimento usados para montar o Pedido de
+ * Obtenção quando um produto atinge o Ponto de Pedido. Colunas:
+ *   A - Material (nome do produto, casado com o nome usado na aba "Estoque")
+ *   B - Ponto de Pedido (referência; o valor realmente usado pelo app pra
+ *       calcular o status continua sendo o da aba "Estoque", coluna F)
+ *   C - Unidade (UF do Pedido de Obtenção)
+ *   D - Categoria
+ *   E - Descrição do Fornecedor (texto longo que vai na coluna DESCRIÇÃO do PDF)
+ *   F - Quantidade mínima
+ *   G - Multiplicador (QTD do PDF = F × G)
+ *   H - Valor unitário (VALOR (UN) do PDF; TOTAL do PDF = QTD × H)
+ */
+const DEMANDA_SHEET_NAME = "Demanda";
+
+/**
  * SÓ PRECISA RODAR UMA VEZ, MANUALMENTE, PELO EDITOR DO APPS SCRIPT.
  * Selecione esta função no menu suspenso ao lado do botão "Executar" (▶) e
  * clique em Executar. Isso abre a tela de autorização e concede ao script a
@@ -121,6 +136,22 @@ function autorizarAcessoAoDrive() {
   const testFile = folder.createFile(testBlob);
   testFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
   testFile.setTrashed(true);
+}
+
+/**
+ * SÓ PRECISA RODAR UMA VEZ, MANUALMENTE, PELO EDITOR DO APPS SCRIPT.
+ * Concede ao script a permissão de enviar e-mails (necessária para o botão
+ * "Enviar por E-mail" do Pedido de Obtenção na página de Ponto de Pedido).
+ * Sem rodar isso uma vez, chamadas feitas de fora (pelo site) falham com
+ * erro de permissão. Envia um e-mail de teste para a própria conta que
+ * publicou o Web App, só para confirmar que a autorização foi concedida.
+ */
+function autorizarEnvioDeEmail() {
+  MailApp.sendEmail({
+    to: Session.getActiveUser().getEmail(),
+    subject: "Teste de autorização — Dashboard Almoxarifado",
+    body: "Este e-mail confirma que o Web App tem permissão para enviar e-mails com anexo."
+  });
 }
 
 /**
@@ -371,6 +402,8 @@ function doPost(e) {
       response = { card: handleLiberacaoRecusar(ss, payload) };
     } else if (tipo === "liberacao_excluir") {
       response = { deleted: handleLiberacaoExcluir(ss, payload) };
+    } else if (tipo === "enviar_pedido_obtencao") {
+      response = { enviado: handleEnviarPedidoObtencao(payload) };
     } else {
       response = { count: handleRetiradaMaterial(ss, normalizeItemsPayload(payload)) };
     }
@@ -670,6 +703,9 @@ function doGet(e) {
     if (e && e.parameter && e.parameter.action === "liberacao") {
       return getLiberacaoCards();
     }
+    if (e && e.parameter && e.parameter.action === "demanda") {
+      return getDemandaData();
+    }
 
     return ContentService
       .createTextOutput(JSON.stringify({ status: "ok", message: "Web App ativo." }))
@@ -763,6 +799,79 @@ function getEstoqueLevels() {
   return ContentService
     .createTextOutput(JSON.stringify({ status: "success", items: items }))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// --- PEDIDO DE OBTENÇÃO (DEMANDA / ENVIO POR E-MAIL) ---
+
+/**
+ * Retorna os dados de fornecimento da aba "Demanda" (ver comentário da
+ * constante DEMANDA_SHEET_NAME), usados para montar o Pedido de Obtenção
+ * dos produtos que atingiram o Ponto de Pedido. Se a aba ainda não existir,
+ * devolve uma lista vazia em vez de erro (o app trata como "sem dados de
+ * fornecedor cadastrados").
+ */
+function getDemandaData() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(DEMANDA_SHEET_NAME);
+  const items = [];
+
+  if (sheet) {
+    const lastRow = getLastRowInColumn(sheet, 1);
+    if (lastRow >= 2) {
+      const rowCount = lastRow - 1;
+      const values = sheet.getRange(2, 1, rowCount, 8).getValues();
+      values.forEach(function (row) {
+        const material = String(row[0] || '').trim();
+        if (!material) return;
+        items.push({
+          material: material,
+          pontoPedido: Number(row[1]) || 0,
+          unidade: String(row[2] || '').trim(),
+          categoria: String(row[3] || '').trim(),
+          descricaoFornecedor: String(row[4] || '').trim(),
+          qtdMinima: Number(row[5]) || 0,
+          multiplicador: Number(row[6]) || 0,
+          valorUnitario: Number(row[7]) || 0
+        });
+      });
+    }
+  }
+
+  return ContentService
+    .createTextOutput(JSON.stringify({ status: "success", items: items }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Envia por e-mail o PDF do Pedido de Obtenção (gerado no navegador e
+ * enviado aqui em base64), para os destinatários informados.
+ */
+function handleEnviarPedidoObtencao(payload) {
+  const destinatarios = Array.isArray(payload.destinatarios) ? payload.destinatarios : [];
+  const emailsValidos = destinatarios.map(function (e) { return String(e || '').trim(); }).filter(function (e) { return e; });
+
+  if (emailsValidos.length === 0) {
+    throw new Error("Informe pelo menos um destinatário.");
+  }
+  if (!payload.arquivo || !payload.arquivo.base64) {
+    throw new Error("PDF do Pedido de Obtenção não informado.");
+  }
+
+  const bytes = Utilities.base64Decode(payload.arquivo.base64);
+  const blob = Utilities.newBlob(
+    bytes,
+    payload.arquivo.mimeType || "application/pdf",
+    payload.arquivo.nome || "Pedido de Obtencao.pdf"
+  );
+
+  MailApp.sendEmail({
+    to: emailsValidos.join(','),
+    subject: payload.assunto || "Pedido de Obtenção — Reposição de Estoque",
+    body: payload.corpo || "Segue em anexo o Pedido de Obtenção para reposição dos itens que atingiram o Ponto de Pedido no Almoxarifado.",
+    attachments: [blob]
+  });
+
+  return true;
 }
 
 // --- LIBERAÇÃO DE DOCUMENTOS (KANBAN) ---

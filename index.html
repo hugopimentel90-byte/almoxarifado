@@ -258,6 +258,35 @@
     </div>
   </div>
 
+  <!-- Modal de Pedido de Obtenção (produtos que atingiram o Ponto de Pedido) -->
+  <div id="pedidoObtencaoModal" class="modal-overlay hidden">
+    <div class="modal-card modal-card--wide">
+      <h2 class="modal-title">Pedido de Obtenção</h2>
+      <p class="modal-subtitle">Estes produtos já atingiram o Ponto de Pedido. Selecione os que entrarão neste pedido, informe o número do documento e para quem enviar.</p>
+
+      <div id="pedidoObtencaoItemsList" class="pedido-obtencao-items-list"></div>
+
+      <div class="form-footer-inputs" style="margin-top: 1.25rem;">
+        <div class="filter-group">
+          <label for="pedidoObtencaoNumero">Número do Pedido de Obtenção</label>
+          <input type="text" id="pedidoObtencaoNumero" placeholder="Ex: BFLa-16-30/2026">
+        </div>
+        <div class="filter-group">
+          <label for="pedidoObtencaoEmails">Destinatário(s) de E-mail</label>
+          <input type="text" id="pedidoObtencaoEmails" placeholder="Separe vários e-mails por vírgula">
+        </div>
+      </div>
+
+      <p id="pedidoObtencaoError" class="modal-error-text hidden"></p>
+
+      <div class="form-actions" style="margin-top: 1.5rem;">
+        <button id="btnCancelPedidoObtencao" class="btn btn-secondary">Cancelar</button>
+        <button id="btnBaixarPedidoObtencaoPDF" class="btn btn-secondary">Baixar PDF</button>
+        <button id="btnEnviarPedidoObtencaoEmail" class="btn btn-submit">Enviar por E-mail</button>
+      </div>
+    </div>
+  </div>
+
   <div class="app-layout">
     
     <!-- Menu Lateral (Sidebar) -->
@@ -931,11 +960,17 @@
 
       <!-- ABA 6: PONTO DE PEDIDO (acesso restrito ao perfil administrador) -->
       <main id="viewPontoPedido" class="view-content container hidden">
-        <header style="margin-bottom: 1.5rem;">
+        <header style="margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
           <div class="header-title-container">
             <h1>Ponto de Pedido</h1>
             <p>Acompanhe quais produtos estão perto (ou já na hora) de precisar de um novo pedido de compra</p>
           </div>
+          <button id="btnAbrirPedidoObtencao" class="btn-refresh">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+            </svg>
+            Itens para Pedido de Compra
+          </button>
         </header>
 
         <section class="table-card">

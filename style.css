@@ -2039,3 +2039,58 @@ tr:hover td { background-color: var(--bg-primary); }
   color: var(--text-primary);
   text-align: right;
 }
+
+/* Modal de Pedido de Obtenção */
+.pedido-obtencao-items-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+
+.pedido-obtencao-item-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+}
+
+.pedido-obtencao-item-row input[type="checkbox"] {
+  margin-top: 0.2rem;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.pedido-obtencao-item-row.pedido-obtencao-item-row--disabled {
+  opacity: 0.65;
+}
+
+.pedido-obtencao-item-row.pedido-obtencao-item-row--disabled input[type="checkbox"] {
+  cursor: not-allowed;
+}
+
+.pedido-obtencao-item-name {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.pedido-obtencao-item-meta {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  margin-top: 0.125rem;
+}
+
+.pedido-obtencao-item-warning {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-warning);
+  margin-top: 0.25rem;
+}
