@@ -2834,18 +2834,18 @@ function gerarPedidoObtencaoDoc(itensSelecionados, numero) {
   normalText(`Data:____/_____/${anoAtual}.`, pageWidth - marginX - 40, y);
   y += 16;
 
-  normalText('_______________________', marginX, y);
+  centeredText('_______________________', y, 9.5, false);
   y += 5;
-  normalText('ASSINATURA E CARIMBO DO RESPONSÁVEL', marginX, y);
+  centeredText('ASSINATURA E CARIMBO DO RESPONSÁVEL', y, 9.5, false);
   y += 4.5;
-  normalText('SETOR REQUISITANTE', marginX, y);
+  centeredText('SETOR REQUISITANTE', y, 9.5, false);
   y += 12;
 
-  normalText('______________________', marginX, y);
+  centeredText('______________________', y, 9.5, false);
   y += 5;
-  normalText('ASSINATURA E CARIMBO DO RESPONSÁVEL', marginX, y);
+  centeredText('ASSINATURA E CARIMBO DO RESPONSÁVEL', y, 9.5, false);
   y += 4.5;
-  normalText('DIVISÃO DE OBTENÇÃO', marginX, y);
+  centeredText('DIVISÃO DE OBTENÇÃO', y, 9.5, false);
   y += 10;
 
   normalText('Enquadramento: (Somente nas hipóteses de dispensa/inexigibilidade)', marginX, y, 8.5);
@@ -2865,11 +2865,11 @@ function gerarPedidoObtencaoDoc(itensSelecionados, numero) {
   y += 10;
   normalText(`Data:____/_____/${anoAtual}.`, pageWidth - marginX - 40, y);
   y += 16;
-  normalText('_________________________________________', marginX, y);
+  centeredText('_________________________________________', y, 9.5, false);
   y += 5;
-  normalText('ASSINATURA E CARIMBO DO RESPONSÁVEL', marginX, y);
+  centeredText('ASSINATURA E CARIMBO DO RESPONSÁVEL', y, 9.5, false);
   y += 4.5;
-  normalText('DIVISÃO DE MATERIAL', marginX, y);
+  centeredText('DIVISÃO DE MATERIAL', y, 9.5, false);
   y += 10;
 
   sectionLabel('5. DISPONIBILIDADE DE RECURSOS', y);
@@ -2889,15 +2889,13 @@ function gerarPedidoObtencaoDoc(itensSelecionados, numero) {
   normalText(`Data:____/_____/${anoAtual}.`, pageWidth - marginX - 40, y);
   y += 16;
 
-  normalText('_________________________________________', marginX, y);
+  centeredText('_________________________________________', y, 9.5, false);
   y += 5;
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.text('ALLEX CAMPOS CARDIANO', marginX, y);
+  centeredText('ALLEX CAMPOS CARDIANO', y, 9.5, true);
   y += 4.5;
-  normalText('Capitão-Tenente (IM)', marginX, y);
+  centeredText('Capitão-Tenente (IM)', y, 9.5, false);
   y += 4.5;
-  normalText('Agente Financeiro', marginX, y);
+  centeredText('Agente Financeiro', y, 9.5, false);
   y += 10;
 
   doc.setFont('helvetica', 'bold');
@@ -2907,15 +2905,13 @@ function gerarPedidoObtencaoDoc(itensSelecionados, numero) {
   normalText(`Data:____/_____/${anoAtual}.`, pageWidth - marginX - 40, y);
   y += 16;
 
-  normalText('_________________________________________', marginX, y);
+  centeredText('_________________________________________', y, 9.5, false);
   y += 5;
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.text('JOÃO PAULO DE TARSO FERREIRA', marginX, y);
+  centeredText('JOÃO PAULO DE TARSO FERREIRA', y, 9.5, true);
   y += 4.5;
-  normalText('Capitão de Fragata', marginX, y);
+  centeredText('Capitão de Fragata', y, 9.5, false);
   y += 4.5;
-  normalText('Agente Fiscal', marginX, y);
+  centeredText('Agente Fiscal', y, 9.5, false);
   y += 10;
 
   sectionLabel('6. AUTORIZAÇÃO', y);
@@ -2939,7 +2935,7 @@ function gerarPedidoObtencaoDoc(itensSelecionados, numero) {
   y += despachoLines.length * 4.5 + 6;
   normalText(`Data:____/_____/${anoAtual}.`, pageWidth - marginX - 40, y);
   y += 16;
-  normalText('________________________________', marginX, y);
+  centeredText('________________________________', y, 9.5, false);
 
   pageFooter('2 - 3');
 
@@ -2964,15 +2960,13 @@ function gerarPedidoObtencaoDoc(itensSelecionados, numero) {
   normalText(`Data:____/_____/${anoAtual}.`, pageWidth - marginX - 40, y);
   y += 16;
 
-  normalText('_________________________________________', marginX, y);
+  centeredText('_________________________________________', y, 9.5, false);
   y += 5;
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.text('ALLEX CAMPOS CARDIANO', marginX, y);
+  centeredText('ALLEX CAMPOS CARDIANO', y, 9.5, true);
   y += 4.5;
-  normalText('Capitão-Tenente (IM)', marginX, y);
+  centeredText('Capitão-Tenente (IM)', y, 9.5, false);
   y += 4.5;
-  normalText('Agente Financeiro', marginX, y);
+  centeredText('Agente Financeiro', y, 9.5, false);
 
   pageFooter('3 - 3');
 
