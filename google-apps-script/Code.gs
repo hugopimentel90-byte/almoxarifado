@@ -402,27 +402,79 @@ function agruparDuplicatasEstoque_() {
 }
 
 /**
+ * O CacheService do Google recusa guardar mais de ~100KB numa única chave.
+ * A aba "Estoque" sozinha já passa disso (quase 2.000 produtos ~= 240KB em
+ * JSON) — sem isso, o cache dessa consulta específica NUNCA entraria em
+ * vigor, silenciosamente, e todo acesso à aba Estoque continuaria lendo a
+ * planilha inteira do zero. Por isso a resposta é dividida em pedaços de
+ * até CACHE_CHUNK_SIZE bytes, cada um guardado em sua própria chave, com uma
+ * chave extra "_meta" guardando quantos pedaços existem.
+ */
+const CACHE_CHUNK_SIZE = 90000;
+
+/**
  * Devolve a resposta pronta (JSON) de uma consulta a partir do cache, se
  * houver uma versão recente guardada; senão, calcula na hora chamando
- * computeJsonFn(), guarda o resultado no cache (quando cabe) e devolve.
+ * computeJsonFn(), guarda o resultado no cache (em pedaços, se precisar) e
+ * devolve.
  */
 function getFromCacheOrCompute_(cacheKey, computeJsonFn) {
   const cache = CacheService.getScriptCache();
-  const cached = cache.get(cacheKey);
-  if (cached) {
+  const cached = getCachedChunked_(cache, cacheKey);
+  if (cached !== null) {
     return ContentService.createTextOutput(cached).setMimeType(ContentService.MimeType.JSON);
   }
 
   const json = computeJsonFn();
-  try {
-    cache.put(cacheKey, json, CACHE_TTL_SECONDS);
-  } catch (err) {
-    // O CacheService recusa guardar valores acima de ~100KB. Se a aba tiver
-    // ficado grande demais pro cache, simplesmente não guarda — a próxima
-    // consulta volta a buscar direto da planilha, sem quebrar nada.
-  }
-
+  putCachedChunked_(cache, cacheKey, json);
   return ContentService.createTextOutput(json).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Divide `json` em pedaços de até CACHE_CHUNK_SIZE bytes e guarda cada um
+ * numa chave própria (cacheKey + '_0', '_1', ...), mais uma chave
+ * cacheKey + '_meta' com a quantidade de pedaços. Se mesmo assim não couber
+ * (planilha ficou enorme demais), simplesmente não guarda nada — a próxima
+ * consulta volta a buscar direto da planilha, sem quebrar nada.
+ */
+function putCachedChunked_(cache, cacheKey, json) {
+  try {
+    const totalChunks = Math.ceil(json.length / CACHE_CHUNK_SIZE) || 1;
+    const values = {};
+    for (let i = 0; i < totalChunks; i++) {
+      values[cacheKey + '_' + i] = json.substring(i * CACHE_CHUNK_SIZE, (i + 1) * CACHE_CHUNK_SIZE);
+    }
+    values[cacheKey + '_meta'] = String(totalChunks);
+    cache.putAll(values, CACHE_TTL_SECONDS);
+  } catch (err) {
+    // Ver comentário acima — simplesmente não guarda em cache neste caso.
+  }
+}
+
+/**
+ * Lê de volta e remonta o JSON guardado por putCachedChunked_. Devolve null
+ * se não houver nada guardado, ou se algum pedaço já tiver expirado (evita
+ * devolver um JSON incompleto/corrompido) — nos dois casos, o chamador cai
+ * de volta para calcular na hora.
+ */
+function getCachedChunked_(cache, cacheKey) {
+  const totalChunksStr = cache.get(cacheKey + '_meta');
+  if (!totalChunksStr) return null;
+
+  const totalChunks = Number(totalChunksStr) || 0;
+  if (totalChunks <= 0) return null;
+
+  const keys = [];
+  for (let i = 0; i < totalChunks; i++) keys.push(cacheKey + '_' + i);
+  const parts = cache.getAll(keys);
+
+  let json = '';
+  for (let i = 0; i < totalChunks; i++) {
+    const part = parts[cacheKey + '_' + i];
+    if (part === undefined || part === null) return null;
+    json += part;
+  }
+  return json;
 }
 
 /**
@@ -430,10 +482,12 @@ function getFromCacheOrCompute_(cacheKey, computeJsonFn) {
  * Retirada é gravada (e pelas ferramentas manuais de consolidação/limpeza
  * da aba Estoque), pra garantir que a próxima consulta já reflita a
  * gravação — em vez de mostrar dado desatualizado até o cache expirar
- * sozinho.
+ * sozinho. Remover só a chave "_meta" já é suficiente: sem ela,
+ * getCachedChunked_ nunca mais reconhece os pedaços antigos como válidos
+ * (eles somem sozinhos do cache pouco depois, quando o TTL vencer).
  */
 function invalidateEstoqueCache_() {
-  CacheService.getScriptCache().remove(CACHE_KEY_ESTOQUE);
+  CacheService.getScriptCache().remove(CACHE_KEY_ESTOQUE + '_meta');
 }
 
 /**
@@ -441,7 +495,7 @@ function invalidateEstoqueCache_() {
  * criado, avança, é recusado ou excluído.
  */
 function invalidateLiberacaoCache_() {
-  CacheService.getScriptCache().remove(CACHE_KEY_LIBERACAO);
+  CacheService.getScriptCache().remove(CACHE_KEY_LIBERACAO + '_meta');
 }
 
 function doPost(e) {
