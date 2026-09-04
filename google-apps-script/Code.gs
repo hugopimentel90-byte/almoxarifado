@@ -117,6 +117,24 @@ const LIBERACAO_IMEDIATO_PASSWORD = "imediato321";
 const DEMANDA_SHEET_NAME = "Demanda";
 
 /**
+ * Cache compartilhado por TODAS as execuções do script (não é por usuário) —
+ * usado para evitar reler a planilha inteira toda vez que alguém troca de
+ * aba no site. Com vários usuários acessando ao mesmo tempo, cada um
+ * disparava sua própria leitura completa da aba, competindo pelo mesmo
+ * recurso e deixando tudo mais lento pra todo mundo; com o cache "quente",
+ * a mesma consulta feita por qualquer usuário nos próximos segundos é
+ * respondida na hora, sem tocar na planilha de novo.
+ *
+ * O tempo de vida é curto (poucos segundos) de propósito: é só o suficiente
+ * pra absorver várias trocas de aba/atualizações simultâneas, sem deixar o
+ * app mostrando dado desatualizado por muito tempo depois de uma gravação.
+ */
+const CACHE_TTL_SECONDS = 20;
+const CACHE_KEY_ESTOQUE = 'estoque_levels';
+const CACHE_KEY_DEMANDA = 'demanda_data';
+const CACHE_KEY_LIBERACAO = 'liberacao_cards';
+
+/**
  * SÓ PRECISA RODAR UMA VEZ, MANUALMENTE, PELO EDITOR DO APPS SCRIPT.
  * Selecione esta função no menu suspenso ao lado do botão "Executar" (▶) e
  * clique em Executar. Isso abre a tela de autorização e concede ao script a
@@ -252,6 +270,7 @@ function consolidarProdutosDuplicadosEstoque() {
     'Consolidação concluída. Produtos únicos: ' + novaMatriz.length +
     ' (antes: ' + totalLinhasAntigas + ' linhas). Linhas duplicadas removidas: ' + linhasSobrando
   );
+  invalidateEstoqueCache_();
 }
 
 /**
@@ -299,6 +318,7 @@ function compactarEntradasEstoque() {
   Logger.log(
     'Compactação concluída. Colunas de entrada: ' + entradaColumnCount + ' → 1. Linhas processadas: ' + rowCount
   );
+  invalidateEstoqueCache_();
 }
 
 /**
@@ -381,6 +401,49 @@ function agruparDuplicatasEstoque_() {
   };
 }
 
+/**
+ * Devolve a resposta pronta (JSON) de uma consulta a partir do cache, se
+ * houver uma versão recente guardada; senão, calcula na hora chamando
+ * computeJsonFn(), guarda o resultado no cache (quando cabe) e devolve.
+ */
+function getFromCacheOrCompute_(cacheKey, computeJsonFn) {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    return ContentService.createTextOutput(cached).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  const json = computeJsonFn();
+  try {
+    cache.put(cacheKey, json, CACHE_TTL_SECONDS);
+  } catch (err) {
+    // O CacheService recusa guardar valores acima de ~100KB. Se a aba tiver
+    // ficado grande demais pro cache, simplesmente não guarda — a próxima
+    // consulta volta a buscar direto da planilha, sem quebrar nada.
+  }
+
+  return ContentService.createTextOutput(json).setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Descarta o cache de níveis de estoque. Chamada sempre que uma Entrada ou
+ * Retirada é gravada (e pelas ferramentas manuais de consolidação/limpeza
+ * da aba Estoque), pra garantir que a próxima consulta já reflita a
+ * gravação — em vez de mostrar dado desatualizado até o cache expirar
+ * sozinho.
+ */
+function invalidateEstoqueCache_() {
+  CacheService.getScriptCache().remove(CACHE_KEY_ESTOQUE);
+}
+
+/**
+ * Descarta o cache dos cards de Liberação. Chamada sempre que um card é
+ * criado, avança, é recusado ou excluído.
+ */
+function invalidateLiberacaoCache_() {
+  CacheService.getScriptCache().remove(CACHE_KEY_LIBERACAO);
+}
+
 function doPost(e) {
   try {
     if (!e || !e.postData || !e.postData.contents) {
@@ -445,6 +508,15 @@ function normalizeItemsPayload(payload) {
  * aba "Estoque". Antes de gravar qualquer coisa, valida se há saldo
  * suficiente para TODOS os itens da retirada; se algum produto não tiver
  * saldo suficiente, nada é gravado e um erro tipado é lançado.
+ *
+ * Toda a leitura da aba "Estoque" acontece de uma vez só, no início (ver
+ * lerEstoqueParaRetirada_), e todas as gravações são feitas em lote (uma
+ * chamada para a aba "Registro" com todos os itens, e uma chamada por
+ * produto afetado no "Estoque") — em vez de uma chamada de leitura/escrita
+ * por produto/coluna, como era feito antes. Isso importa porque tudo isso
+ * acontece com o lock do script preso: quanto menos chamadas à planilha
+ * dentro do lock, menos tempo outra pessoa usando o app (Retirada, Entrada
+ * ou Liberação) fica esperando na fila para poder gravar a dela.
  */
 function handleRetiradaMaterial(ss, items) {
   const registroSheet = ss.getSheetByName(REGISTRO_SHEET_NAME);
@@ -457,20 +529,38 @@ function handleRetiradaMaterial(ss, items) {
   lock.waitLock(10000);
 
   try {
-    // 1. Agrega a quantidade solicitada por produto e verifica o saldo disponível.
+    // 1. Lê a aba "Estoque" inteira de uma vez (nomes, base, categoria,
+    //    código de barras, ponto de pedido e colunas de entrada), e monta
+    //    um índice por nome de produto — nenhuma leitura adicional é feita
+    //    por produto do lote a partir daqui.
+    const estoqueSnapshot = estoqueSheet ? lerEstoqueParaRetirada_(estoqueSheet) : null;
+
+    // 2. Agrega a quantidade solicitada por produto e verifica o saldo
+    //    disponível, tudo calculado em memória a partir do snapshot acima.
     //    Produtos que ainda não existem na aba "Estoque" não são validados
     //    (não há como saber o saldo deles).
     const stockByProduct = {};
 
-    if (estoqueSheet) {
+    if (estoqueSnapshot) {
       items.forEach(function (item) {
         const productName = (item.produto || "").trim();
         if (!productName) return;
 
         const key = productName.toLowerCase();
         if (!(key in stockByProduct)) {
-          const row = findRowByProductName(estoqueSheet, 1, productName);
-          stockByProduct[key] = (row === -1) ? null : buildStockInfo(estoqueSheet, row, productName);
+          const info = estoqueSnapshot.porNome[key];
+          stockByProduct[key] = info
+            ? {
+                produto: productName,
+                row: info.row,
+                base: info.base,
+                entradaColunas: info.entradaColunas.slice(),
+                categoria: info.categoria,
+                codigoBarras: info.codigoBarras,
+                pontoPedido: info.pontoPedido,
+                requested: 0
+              }
+            : null;
         }
 
         if (stockByProduct[key]) {
@@ -481,9 +571,14 @@ function handleRetiradaMaterial(ss, items) {
 
     const insufficient = Object.keys(stockByProduct)
       .map(function (key) { return stockByProduct[key]; })
-      .filter(function (info) { return info && info.requested > info.available; })
+      .filter(function (info) {
+        if (!info) return false;
+        const disponivel = info.base + info.entradaColunas.reduce(function (s, v) { return s + v; }, 0);
+        return info.requested > disponivel;
+      })
       .map(function (info) {
-        return { produto: info.produto, disponivel: info.available, solicitado: info.requested };
+        const disponivel = info.base + info.entradaColunas.reduce(function (s, v) { return s + v; }, 0);
+        return { produto: info.produto, disponivel: disponivel, solicitado: info.requested };
       });
 
     if (insufficient.length > 0) {
@@ -496,12 +591,11 @@ function handleRetiradaMaterial(ss, items) {
       throw err;
     }
 
-    // 2. Grava as retiradas na aba "Registro".
-    let lastRow = getLastRowInColumn(registroSheet, 1);
-
-    items.forEach(function (item) {
-      lastRow++;
-      const row = [
+    // 3. Grava todas as retiradas na aba "Registro" em UMA única chamada
+    //    (antes: uma chamada de escrita por item do lote).
+    const lastRow = getLastRowInColumn(registroSheet, 1);
+    const matrizRegistro = items.map(function (item) {
+      return [
         item.produto || "",                    // A - Nome do produto
         item.qtd != null ? item.qtd : "",       // B - Quantidade
         item.un || "",                          // C - Tipo de unidade
@@ -513,83 +607,100 @@ function handleRetiradaMaterial(ss, items) {
         item.mes || "",                         // I - Mês do lançamento
         item.categoria || ""                    // J - Categoria
       ];
-      registroSheet.getRange(lastRow, 1, 1, row.length).setValues([row]);
+    });
+    registroSheet.getRange(lastRow + 1, 1, matrizRegistro.length, 10).setValues(matrizRegistro);
 
+    items.forEach(function (item, index) {
       if (item.tempoRetiradaMinutos !== undefined && item.tempoRetiradaMinutos !== null && item.tempoRetiradaMinutos !== "") {
-        registroSheet.getRange(lastRow, 12).setValue(item.tempoRetiradaMinutos); // L - Tempo de retirada (minutos)
+        registroSheet.getRange(lastRow + 1 + index, 12).setValue(item.tempoRetiradaMinutos); // L - Tempo de retirada (minutos)
       }
     });
 
-    // 3. Desconta fisicamente o estoque: primeiro da coluna C, depois das
+    // 4. Desconta fisicamente o estoque: primeiro da coluna C, depois das
     //    colunas de entrada (G em diante, da mais antiga para a mais nova).
-    Object.keys(stockByProduct).forEach(function (key) {
-      const info = stockByProduct[key];
-      if (info && info.requested > 0) {
-        decrementEstoqueStock(estoqueSheet, info.row, info.requested);
-      }
-    });
+    //    Os novos valores são calculados em memória e gravados com UMA
+    //    única chamada por produto afetado (colunas C até a última coluna
+    //    de entrada), em vez de uma chamada de leitura + escrita por coluna.
+    if (estoqueSheet) {
+      Object.keys(stockByProduct).forEach(function (key) {
+        const info = stockByProduct[key];
+        if (!info || info.requested <= 0) return;
+
+        let remaining = info.requested;
+        let novaBase = info.base;
+        const deductBase = Math.min(novaBase, remaining);
+        novaBase -= deductBase;
+        remaining -= deductBase;
+
+        const novasEntradas = info.entradaColunas.slice();
+        for (let i = 0; i < novasEntradas.length && remaining > 0; i++) {
+          const deduct = Math.min(novasEntradas[i], remaining);
+          novasEntradas[i] -= deduct;
+          remaining -= deduct;
+        }
+
+        const linhaValores = [novaBase, info.categoria, info.codigoBarras, info.pontoPedido].concat(novasEntradas);
+        estoqueSheet.getRange(info.row, 3, 1, linhaValores.length).setValues([linhaValores]);
+      });
+    }
 
     return items.length;
 
   } finally {
     lock.releaseLock();
+    invalidateEstoqueCache_();
   }
 }
 
 /**
- * Lê o saldo atual (coluna C + colunas de entrada) de um produto na aba
- * "Estoque" para a linha informada.
+ * Lê a aba "Estoque" inteira de uma só vez (nomes, base, categoria, código
+ * de barras, ponto de pedido e todas as colunas de entrada) e monta um
+ * índice por nome de produto. Usada por handleRetiradaMaterial para evitar
+ * uma leitura separada da planilha para cada produto do lote — o tempo que
+ * a operação prende o lock deixa de crescer com o número de produtos da
+ * retirada.
  */
-function buildStockInfo(sheet, row, productName) {
+function lerEstoqueParaRetirada_(sheet) {
+  const lastProductRow = getLastRowInColumn(sheet, 1);
+  const porNome = {};
+  if (lastProductRow < 2) {
+    return { porNome: porNome };
+  }
+
+  const rowCount = lastProductRow - 1;
   const lastColumn = sheet.getLastColumn();
   const entradaColumnCount = Math.max(lastColumn - ESTOQUE_START_COLUMN + 1, 0);
 
-  const baseValue = Number(sheet.getRange(row, 3).getValue()) || 0;
+  const productNames = sheet.getRange(2, 1, rowCount, 1).getValues();
+  const baseValues = sheet.getRange(2, 3, rowCount, 1).getValues();
+  const categories = sheet.getRange(2, 4, rowCount, 1).getValues();
+  const barcodes = sheet.getRange(2, ESTOQUE_BARCODE_COLUMN, rowCount, 1).getValues();
+  const reorderPoints = sheet.getRange(2, ESTOQUE_REORDER_POINT_COLUMN, rowCount, 1).getValues();
   const entradaValues = entradaColumnCount > 0
-    ? sheet.getRange(row, ESTOQUE_START_COLUMN, 1, entradaColumnCount).getValues()[0]
+    ? sheet.getRange(2, ESTOQUE_START_COLUMN, rowCount, entradaColumnCount).getValues()
     : [];
 
-  const entradasSum = entradaValues.reduce(function (sum, v) { return sum + (Number(v) || 0); }, 0);
+  for (let i = 0; i < rowCount; i++) {
+    const produto = String(productNames[i][0] || "").trim();
+    if (!produto) continue;
 
-  return {
-    produto: productName,
-    row: row,
-    available: baseValue + entradasSum,
-    requested: 0
-  };
-}
+    const key = produto.toLowerCase();
+    // Se houver linhas duplicadas do mesmo produto (planilha ainda não
+    // consolidada), fica com a primeira encontrada — mesmo comportamento de
+    // antes, que também só operava sobre a primeira linha localizada.
+    if (porNome[key]) continue;
 
-/**
- * Desconta qtyToRemove do saldo de um produto: primeiro da coluna C, e se
- * não for suficiente, das colunas de entrada (G em diante, da mais antiga
- * para a mais nova) até zerar a quantidade a remover.
- */
-function decrementEstoqueStock(sheet, row, qtyToRemove) {
-  let remaining = qtyToRemove;
-  if (remaining <= 0) return;
-
-  const baseCell = sheet.getRange(row, 3);
-  const baseValue = Number(baseCell.getValue()) || 0;
-  const deductFromBase = Math.min(baseValue, remaining);
-  if (deductFromBase > 0) {
-    baseCell.setValue(baseValue - deductFromBase);
-    remaining -= deductFromBase;
+    porNome[key] = {
+      row: i + 2,
+      base: Number(baseValues[i][0]) || 0,
+      entradaColunas: entradaColumnCount > 0 ? entradaValues[i].map(function (v) { return Number(v) || 0; }) : [],
+      categoria: categories[i][0],
+      codigoBarras: barcodes[i][0],
+      pontoPedido: reorderPoints[i][0]
+    };
   }
 
-  if (remaining > 0) {
-    const lastColumn = sheet.getLastColumn();
-    const entradaColumnCount = Math.max(lastColumn - ESTOQUE_START_COLUMN + 1, 0);
-
-    for (let col = ESTOQUE_START_COLUMN; col < ESTOQUE_START_COLUMN + entradaColumnCount && remaining > 0; col++) {
-      const cell = sheet.getRange(row, col);
-      const value = Number(cell.getValue()) || 0;
-      if (value <= 0) continue;
-
-      const deduct = Math.min(value, remaining);
-      cell.setValue(value - deduct);
-      remaining -= deduct;
-    }
-  }
+  return { porNome: porNome };
 }
 
 /**
@@ -619,31 +730,74 @@ function handleEntradaMaterial(ss, items) {
   lock.waitLock(10000);
 
   try {
+    // Lê a coluna A (nomes) e a coluna G (total de entradas) da aba inteira
+    // UMA única vez, em vez de relançar uma busca na coluna inteira para
+    // cada item do lote (como findRowByProductName fazia antes, por item).
+    // Isso é o que mais importa aqui: com um lote de N itens, isso troca N
+    // leituras completas da planilha por 2.
+    const lastProductRow = getLastRowInColumn(sheet, 1);
+    const rowCount = Math.max(lastProductRow - 1, 0);
+    const nomesAtuais = rowCount > 0 ? sheet.getRange(2, 1, rowCount, 1).getValues() : [];
+    const entradaAtual = rowCount > 0 ? sheet.getRange(2, ESTOQUE_START_COLUMN, rowCount, 1).getValues() : [];
+
+    const rowByName = {};
+    nomesAtuais.forEach(function (r, i) {
+      const nome = String(r[0] || "").trim();
+      if (nome) rowByName[nome.toLowerCase()] = i + 2;
+    });
+
+    const entradaAcumulada = {};   // linha -> novo total da coluna G
+    const unidadePorLinha = {};    // linha -> última unidade informada no lote
+    const categoriaPorLinha = {};  // linha -> categoria (só quando informada)
+    const novosProdutos = {};      // linha -> nome do produto novo
+    let proximaLinhaNova = lastProductRow + 1;
+
     items.forEach(function (item) {
       const productName = (item.produto || "").trim();
       if (!productName) return;
 
-      let row = findRowByProductName(sheet, 1, productName);
-      if (row === -1) {
-        row = getLastRowInColumn(sheet, 1) + 1;
-        sheet.getRange(row, 1).setValue(productName);
+      const key = productName.toLowerCase();
+      let row = rowByName[key];
+      if (!row) {
+        row = proximaLinhaNova++;
+        rowByName[key] = row;
+        novosProdutos[row] = productName;
       }
 
-      sheet.getRange(row, 2).setValue(item.un || "");
+      unidadePorLinha[row] = item.un || "";
       if (item.categoria) {
-        sheet.getRange(row, 4).setValue(item.categoria);
+        categoriaPorLinha[row] = item.categoria;
       }
 
-      const entradaCell = sheet.getRange(row, ESTOQUE_START_COLUMN);
-      const totalAtual = Number(entradaCell.getValue()) || 0;
+      const totalAtual = entradaAcumulada[row] !== undefined
+        ? entradaAcumulada[row]
+        : (function () {
+            const idx = row - 2;
+            return (idx >= 0 && idx < entradaAtual.length) ? (Number(entradaAtual[idx][0]) || 0) : 0;
+          })();
       const qtdNova = item.qtd != null ? Number(item.qtd) || 0 : 0;
-      entradaCell.setValue(totalAtual + qtdNova);
+      entradaAcumulada[row] = totalAtual + qtdNova;
+    });
+
+    // Grava: nome (só produtos novos), unidade, categoria (só se informada)
+    // e o novo total de entradas — no máximo 2 chamadas por linha afetada.
+    Object.keys(entradaAcumulada).forEach(function (rowStr) {
+      const row = Number(rowStr);
+      if (novosProdutos[row]) {
+        sheet.getRange(row, 1).setValue(novosProdutos[row]);
+      }
+      sheet.getRange(row, 2).setValue(unidadePorLinha[row] || "");
+      if (categoriaPorLinha[row]) {
+        sheet.getRange(row, 4).setValue(categoriaPorLinha[row]);
+      }
+      sheet.getRange(row, ESTOQUE_START_COLUMN).setValue(entradaAcumulada[row]);
     });
 
     return items.length;
 
   } finally {
     lock.releaseLock();
+    invalidateEstoqueCache_();
   }
 }
 
@@ -668,26 +822,6 @@ function getLastRowInColumn(sheet, column) {
     }
   }
   return 1; // nenhuma linha de dados encontrada, assume apenas o cabeçalho
-}
-
-/**
- * Procura o nome de um produto (case-insensitive) em uma coluna específica,
- * a partir da linha 2. Retorna o número da linha ou -1 se não encontrado.
- */
-function findRowByProductName(sheet, column, productName) {
-  const lastRow = getLastRowInColumn(sheet, column);
-  if (lastRow < 2) return -1;
-
-  const values = sheet.getRange(2, column, lastRow - 1, 1).getValues();
-  const target = productName.trim().toLowerCase();
-
-  for (let i = 0; i < values.length; i++) {
-    const cell = String(values[i][0] || "").trim().toLowerCase();
-    if (cell === target) {
-      return i + 2;
-    }
-  }
-  return -1;
 }
 
 /**
@@ -739,6 +873,10 @@ function doGet(e) {
  * primeiro valor não vazio encontrado entre elas.
  */
 function getEstoqueLevels() {
+  return getFromCacheOrCompute_(CACHE_KEY_ESTOQUE, computeEstoqueLevelsJson_);
+}
+
+function computeEstoqueLevelsJson_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(ESTOQUE_SHEET_NAME);
   if (!sheet) {
@@ -796,9 +934,7 @@ function getEstoqueLevels() {
 
   const items = order.map(function (key) { return itemsByKey[key]; });
 
-  return ContentService
-    .createTextOutput(JSON.stringify({ status: "success", items: items }))
-    .setMimeType(ContentService.MimeType.JSON);
+  return JSON.stringify({ status: "success", items: items });
 }
 
 // --- PEDIDO DE OBTENÇÃO (DEMANDA / ENVIO POR E-MAIL) ---
@@ -811,6 +947,10 @@ function getEstoqueLevels() {
  * fornecedor cadastrados").
  */
 function getDemandaData() {
+  return getFromCacheOrCompute_(CACHE_KEY_DEMANDA, computeDemandaDataJson_);
+}
+
+function computeDemandaDataJson_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName(DEMANDA_SHEET_NAME);
   const items = [];
@@ -837,9 +977,7 @@ function getDemandaData() {
     }
   }
 
-  return ContentService
-    .createTextOutput(JSON.stringify({ status: "success", items: items }))
-    .setMimeType(ContentService.MimeType.JSON);
+  return JSON.stringify({ status: "success", items: items });
 }
 
 /**
@@ -1037,6 +1175,7 @@ function handleLiberacaoCriar(ss, payload) {
     sheet.appendRow(row);
   } finally {
     lock.releaseLock();
+    invalidateLiberacaoCache_();
   }
 
   return liberacaoRowToCard(row);
@@ -1089,6 +1228,7 @@ function handleLiberacaoAvancar(ss, payload) {
 
   } finally {
     lock.releaseLock();
+    invalidateLiberacaoCache_();
   }
 }
 
@@ -1131,6 +1271,7 @@ function handleLiberacaoRecusar(ss, payload) {
 
   } finally {
     lock.releaseLock();
+    invalidateLiberacaoCache_();
   }
 }
 
@@ -1166,6 +1307,7 @@ function handleLiberacaoExcluir(ss, payload) {
     sheet.deleteRow(rowIndex);
   } finally {
     lock.releaseLock();
+    invalidateLiberacaoCache_();
   }
 
   if (urlArquivo) {
@@ -1195,6 +1337,10 @@ function getDriveFileIdFromUrl(url) {
  * Retorna todos os cards da esteira de liberação.
  */
 function getLiberacaoCards() {
+  return getFromCacheOrCompute_(CACHE_KEY_LIBERACAO, computeLiberacaoCardsJson_);
+}
+
+function computeLiberacaoCardsJson_() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = getOrCreateLiberacaoSheet(ss);
   const lastRow = sheet.getLastRow();
@@ -1208,7 +1354,5 @@ function getLiberacaoCards() {
     });
   }
 
-  return ContentService
-    .createTextOutput(JSON.stringify({ status: "success", cards: cards }))
-    .setMimeType(ContentService.MimeType.JSON);
+  return JSON.stringify({ status: "success", cards: cards });
 }
