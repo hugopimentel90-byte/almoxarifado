@@ -3147,6 +3147,7 @@ function initializeLiberacaoModule() {
   document.getElementById('btnCloseLiberacaoDetail').addEventListener('click', closeLiberacaoCardDetail);
   document.getElementById('btnLiberacaoAdvance').addEventListener('click', handleLiberacaoAdvance);
   document.getElementById('btnLiberacaoReject').addEventListener('click', handleLiberacaoReject);
+  document.getElementById('btnLiberacaoRegistrarRetirada').addEventListener('click', handleRegistrarRetiradaDeLiberacao);
   document.getElementById('btnAddLiberacaoItem').addEventListener('click', handleAddLiberacaoItem);
   document.getElementById('liberacaoCardDetailModal').addEventListener('click', (e) => {
     if (e.target.id === 'liberacaoCardDetailModal') {
@@ -3641,7 +3642,8 @@ function openLiberacaoCardDetail(id) {
     { label: 'Criado em', value: card.criadoEm },
     { label: 'Transmitido em', value: card.transmitidoEm },
     { label: 'Aprovado (Encarregado) em', value: card.aprovadoEncarregadoEm },
-    { label: 'Aprovado (Imediato) em', value: card.aprovadoImediatoEm }
+    { label: 'Aprovado (Imediato) em', value: card.aprovadoImediatoEm },
+    { label: 'Retirada registrada no Estoque em', value: card.registradoNoEstoqueEm }
   ].filter(s => s.value);
 
   let timelineHtml = steps.map(s => `
@@ -3666,9 +3668,11 @@ function openLiberacaoCardDetail(id) {
   const errorEl = document.getElementById('liberacaoDetailError');
   const advanceBtn = document.getElementById('btnLiberacaoAdvance');
   const rejectBtn = document.getElementById('btnLiberacaoReject');
+  const registrarRetiradaBtn = document.getElementById('btnLiberacaoRegistrarRetirada');
 
   passwordInput.value = '';
   errorEl.classList.add('hidden');
+  registrarRetiradaBtn.classList.add('hidden');
 
   if (card.status === 'Setor') {
     passwordSection.classList.add('hidden');
@@ -3684,6 +3688,14 @@ function openLiberacaoCardDetail(id) {
     passwordSection.classList.add('hidden');
     advanceBtn.classList.add('hidden');
     rejectBtn.classList.add('hidden');
+
+    // "Liberados" e ainda sem retirada registrada: oferece o botão manual —
+    // usado principalmente pra PIMs que já estavam liberados antes dessa
+    // funcionalidade existir (os novos são registrados automaticamente ao
+    // serem aprovados pelo Imediato).
+    if (card.status === 'Liberados' && !card.registradoNoEstoqueEm && Array.isArray(card.itens) && card.itens.length > 0) {
+      registrarRetiradaBtn.classList.remove('hidden');
+    }
   }
 
   renderLiberacaoItemsSection(card);
@@ -3890,6 +3902,13 @@ async function handleLiberacaoAdvance() {
     const resData = await response.json();
     if (resData && resData.status === 'success') {
       showToast("Documento avançou para a próxima etapa!", "success");
+      // Quando o card acabou de virar "Liberados", o backend já tenta lançar
+      // os itens automaticamente na aba Registro (ver registrarRetiradaAuto-
+      // maticaDaLiberacao_ no Code.gs). Se algo mereceu atenção (ex.: item
+      // não encontrado no Estoque, ou saldo insuficiente), avisa aqui.
+      if (resData.card && resData.card.avisoRegistroEstoque) {
+        showToast(resData.card.avisoRegistroEstoque, "warning");
+      }
       closeLiberacaoCardDetail();
       await fetchLiberacaoCards();
     } else {
@@ -3902,6 +3921,54 @@ async function handleLiberacaoAdvance() {
   } finally {
     clearButtonProcessing(advanceBtn);
     rejectBtn.disabled = false;
+  }
+}
+
+/**
+ * Dispara manualmente o lançamento no Registro de um PIM que já está
+ * "Liberados" — usado sobretudo para os PIMs que já estavam liberados antes
+ * dessa funcionalidade existir (os novos são lançados automaticamente ao
+ * serem aprovados pelo Imediato, ver handleLiberacaoAdvance).
+ */
+async function handleRegistrarRetiradaDeLiberacao() {
+  const card = liberacaoCards.find(c => c.id === currentLiberacaoCardId);
+  if (!card) return;
+
+  const confirmed = window.confirm(
+    `Lançar os itens do PIM "${card.titulo}" como uma retirada na aba Registro (descontando do Estoque)? Essa ação não pode ser desfeita.`
+  );
+  if (!confirmed) return;
+
+  const errorEl = document.getElementById('liberacaoDetailError');
+  errorEl.classList.add('hidden');
+
+  const registrarBtn = document.getElementById('btnLiberacaoRegistrarRetirada');
+  setButtonProcessing(registrarBtn, 'Registrando...');
+
+  try {
+    const response = await fetch(SCRIPT_URL, {
+      method: 'POST',
+      mode: 'cors',
+      headers: {
+        'Content-Type': 'text/plain',
+      },
+      body: JSON.stringify({ tipo: 'liberacao_registrar_retirada', id: card.id })
+    });
+
+    const resData = await response.json();
+    if (resData && resData.status === 'success') {
+      showToast("Retirada registrada na aba Registro!", "success");
+      closeLiberacaoCardDetail();
+      await fetchLiberacaoCards();
+    } else {
+      throw new Error(resData.message || "Erro ao registrar a retirada.");
+    }
+  } catch (error) {
+    console.error("Erro ao registrar retirada de liberação:", error);
+    errorEl.textContent = error.message || "Erro ao registrar a retirada. Tente novamente.";
+    errorEl.classList.remove('hidden');
+  } finally {
+    clearButtonProcessing(registrarBtn);
   }
 }
 

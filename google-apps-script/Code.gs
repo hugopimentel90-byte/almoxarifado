@@ -69,6 +69,23 @@
  *       termine em número é tratada como um item de tabela). Editável pelo
  *       Encarregado (aumentar/diminuir quantidade, excluir item) — a versão
  *       revisada substitui esta coluna ao aprovar; o Imediato só visualiza.
+ *   N - Registrado no Estoque em: preenchida automaticamente assim que os
+ *       itens (coluna M) desse PIM são lançados como uma retirada na aba
+ *       "Registro" (ver registrarRetiradaAutomaticaDaLiberacao_). Vazia
+ *       enquanto isso ainda não aconteceu. Existe pra nunca lançar a mesma
+ *       retirada duas vezes (o que descontaria o estoque em dobro).
+ *
+ *   Assim que um card chega em "Liberados" (aprovado pelo Imediato), os
+ *   itens dele (produto/quantidade, já revisados pelo Encarregado) são
+ *   lançados automaticamente na aba "Registro" — reaproveitando a MESMA
+ *   validação/desconto de estoque de handleRetiradaMaterial (nunca
+ *   duplicando essa lógica em dois lugares). Produtos do PIM sem um nome
+ *   correspondente exato na aba "Estoque" ainda entram no Registro (pra não
+ *   perder a quantidade), mas não têm estoque descontado — nesse caso um
+ *   aviso fica registrado na coluna L (UltimaAcao) do próprio card. Também é
+ *   possível disparar esse lançamento manualmente (usado para PIMs que já
+ *   estavam em "Liberados" antes dessa função existir) pelo botão
+ *   correspondente no modal de detalhe do card.
  *
  *   O documento anexado é salvo no Google Drive (pasta "Almoxarifado -
  *   Documentos de Liberação"), compartilhado como "qualquer pessoa com o
@@ -519,6 +536,8 @@ function doPost(e) {
       response = { card: handleLiberacaoRecusar(ss, payload) };
     } else if (tipo === "liberacao_excluir") {
       response = { deleted: handleLiberacaoExcluir(ss, payload) };
+    } else if (tipo === "liberacao_registrar_retirada") {
+      response = { registrado: handleLiberacaoRegistrarRetirada(ss, payload) };
     } else if (tipo === "enviar_pedido_obtencao") {
       response = { enviado: handleEnviarPedidoObtencao(payload) };
     } else {
@@ -726,6 +745,7 @@ function lerEstoqueParaRetirada_(sheet) {
   const entradaColumnCount = Math.max(lastColumn - ESTOQUE_START_COLUMN + 1, 0);
 
   const productNames = sheet.getRange(2, 1, rowCount, 1).getValues();
+  const units = sheet.getRange(2, 2, rowCount, 1).getValues();
   const baseValues = sheet.getRange(2, 3, rowCount, 1).getValues();
   const categories = sheet.getRange(2, 4, rowCount, 1).getValues();
   const barcodes = sheet.getRange(2, ESTOQUE_BARCODE_COLUMN, rowCount, 1).getValues();
@@ -746,6 +766,7 @@ function lerEstoqueParaRetirada_(sheet) {
 
     porNome[key] = {
       row: i + 2,
+      un: units[i][0],
       base: Number(baseValues[i][0]) || 0,
       entradaColunas: entradaColumnCount > 0 ? entradaValues[i].map(function (v) { return Number(v) || 0; }) : [],
       categoria: categories[i][0],
@@ -1079,7 +1100,7 @@ function getOrCreateLiberacaoSheet(ss) {
     sheet.appendRow([
       "ID", "Setor", "Titulo", "Descricao", "NomeArquivo", "UrlArquivo",
       "Status", "CriadoEm", "TransmitidoEm", "AprovadoEncarregadoEm",
-      "AprovadoImediatoEm", "UltimaAcao", "ItensJSON"
+      "AprovadoImediatoEm", "UltimaAcao", "ItensJSON", "RegistradoNoEstoqueEm"
     ]);
   }
   return sheet;
@@ -1160,7 +1181,8 @@ function liberacaoRowToCard(row) {
     aprovadoEncarregadoEm: formatLiberacaoCell(row[9]),
     aprovadoImediatoEm: formatLiberacaoCell(row[10]),
     ultimaAcao: row[11],
-    itens: parseLiberacaoItens(row[12])
+    itens: parseLiberacaoItens(row[12]),
+    registradoNoEstoqueEm: formatLiberacaoCell(row[13])
   };
 }
 
@@ -1245,6 +1267,9 @@ function handleLiberacaoAvancar(ss, payload) {
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
 
+  let updatedRow;
+  let transicaoParaLiberados = false;
+
   try {
     const id = payload.id;
     if (!id) throw new Error("ID do card não informado.");
@@ -1273,17 +1298,187 @@ function handleLiberacaoAvancar(ss, payload) {
       }
       sheet.getRange(rowIndex, 7).setValue("Liberados");
       sheet.getRange(rowIndex, 11).setValue(nowStr); // K - AprovadoImediatoEm
+      transicaoParaLiberados = true;
     } else {
       throw new Error("Este documento já está liberado e não pode avançar mais.");
     }
 
-    const updatedRow = sheet.getRange(rowIndex, 1, 1, 13).getValues()[0];
-    return liberacaoRowToCard(updatedRow);
+    updatedRow = sheet.getRange(rowIndex, 1, 1, 14).getValues()[0];
 
   } finally {
     lock.releaseLock();
     invalidateLiberacaoCache_();
   }
+
+  const card = liberacaoRowToCard(updatedRow);
+
+  // Só dispara DEPOIS de soltar o lock acima — handleRetiradaMaterial pega o
+  // seu próprio lock, e chamá-lo ainda dentro do lock deste avanço arriscaria
+  // uma disputa desnecessária pelo mesmo recurso na mesma execução.
+  if (transicaoParaLiberados) {
+    const aviso = registrarRetiradaAutomaticaDaLiberacao_(ss, card);
+    if (aviso) {
+      card.avisoRegistroEstoque = aviso;
+    }
+  }
+
+  return card;
+}
+
+/**
+ * Lança os itens (produto/quantidade) de um PIM já "Liberados" como uma
+ * retirada na aba "Registro", reaproveitando handleRetiradaMaterial (mesma
+ * validação de saldo e desconto de estoque usados pela tela de Retirada —
+ * nunca duplicando essa lógica). Chamada automaticamente por
+ * handleLiberacaoAvancar quando o card acaba de virar "Liberados", e também
+ * manualmente por handleLiberacaoRegistrarRetirada (usado para PIMs que já
+ * estavam "Liberados" antes dessa função existir).
+ *
+ * Idempotente: se o card já tiver a coluna N (RegistradoNoEstoqueEm)
+ * preenchida, não faz nada — evita descontar o estoque duas vezes pro mesmo
+ * PIM.
+ *
+ * Produtos do PIM que não têm um nome correspondente exato na aba "Estoque"
+ * (ex.: nome digitado com uma pequena diferença, ou extraído do PDF de um
+ * jeito que não bate) ainda são gravados no Registro — pra não perder a
+ * quantidade retirada do controle —, mas não têm estoque descontado (não há
+ * de onde descontar). Nesse caso, e também se a validação de saldo suficiente
+ * falhar pra algum item, um aviso é gravado na coluna L (UltimaAcao) do card
+ * e devolvido pro chamador.
+ *
+ * @return {string|null} Uma mensagem de aviso (quando algo merece atenção),
+ *   ou null quando tudo correu sem ressalvas (ou não havia nada a fazer).
+ */
+function registrarRetiradaAutomaticaDaLiberacao_(ss, card) {
+  const sheet = getOrCreateLiberacaoSheet(ss);
+
+  if (card.registradoNoEstoqueEm) {
+    return null;
+  }
+
+  const itensValidos = (Array.isArray(card.itens) ? card.itens : [])
+    .map(function (item) {
+      const produto = String((item && item.produto) || '').trim();
+      const qtd = Number(item && item.qtd) || 0;
+      return (produto && qtd > 0) ? { produto: produto, qtd: qtd } : null;
+    })
+    .filter(function (i) { return i; });
+
+  if (itensValidos.length === 0) {
+    return null;
+  }
+
+  const estoqueSheet = ss.getSheetByName(ESTOQUE_SHEET_NAME);
+  const estoqueSnapshot = estoqueSheet ? lerEstoqueParaRetirada_(estoqueSheet) : null;
+
+  const dataLancamento = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yy");
+  const mesLancamento = new Date().getMonth() + 1;
+  const naoEncontrados = [];
+
+  const items = itensValidos.map(function (item) {
+    const info = estoqueSnapshot ? estoqueSnapshot.porNome[item.produto.toLowerCase()] : null;
+    if (!info) naoEncontrados.push(item.produto);
+    return {
+      produto: item.produto,
+      qtd: item.qtd,
+      un: info ? (info.un || '') : '',
+      categoria: info ? (info.categoria || '') : '',
+      dataStr: dataLancamento,
+      setor: card.setor || '',
+      pedido: card.titulo || '',
+      mes: mesLancamento
+    };
+  });
+
+  try {
+    handleRetiradaMaterial(ss, items);
+  } catch (err) {
+    const aviso = 'Não foi possível lançar automaticamente no Registro: ' + err.message;
+    marcarUltimaAcaoLiberacao_(sheet, card.id, aviso);
+    return aviso;
+  }
+
+  marcarRegistradoNoEstoqueLiberacao_(sheet, card.id, formatLiberacaoTimestamp(new Date()));
+
+  if (naoEncontrados.length > 0) {
+    const aviso = 'Retirada registrada no Registro, porém sem baixa de estoque para os itens ' +
+      'não encontrados na aba Estoque: ' + naoEncontrados.join(', ');
+    marcarUltimaAcaoLiberacao_(sheet, card.id, aviso);
+    return aviso;
+  }
+
+  return null;
+}
+
+/**
+ * Grava o timestamp da coluna N (RegistradoNoEstoqueEm) de um card — feito
+ * num ciclo de lock próprio, separado do de handleRetiradaMaterial (que já
+ * terminou e soltou o dele antes desta chamada acontecer).
+ */
+function marcarRegistradoNoEstoqueLiberacao_(sheet, cardId, timestampStr) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const rowIndex = findLiberacaoRowById(sheet, cardId);
+    if (rowIndex === -1) return;
+    sheet.getRange(rowIndex, 14).setValue(timestampStr);
+  } finally {
+    lock.releaseLock();
+    invalidateLiberacaoCache_();
+  }
+}
+
+/**
+ * Grava um texto na coluna L (UltimaAcao) de um card — usado para deixar um
+ * aviso visível no histórico do card quando o lançamento automático no
+ * Registro falha ou tem alguma ressalva.
+ */
+function marcarUltimaAcaoLiberacao_(sheet, cardId, texto) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const rowIndex = findLiberacaoRowById(sheet, cardId);
+    if (rowIndex === -1) return;
+    sheet.getRange(rowIndex, 12).setValue(texto);
+  } finally {
+    lock.releaseLock();
+    invalidateLiberacaoCache_();
+  }
+}
+
+/**
+ * Dispara manualmente o lançamento no Registro de um PIM que já está
+ * "Liberados" — usado para PIMs aprovados antes dessa funcionalidade existir
+ * (não passaram pelo gatilho automático de handleLiberacaoAvancar). Chamado
+ * pelo botão "Registrar Retirada no Estoque" no modal de detalhe do card.
+ */
+function handleLiberacaoRegistrarRetirada(ss, payload) {
+  const id = payload.id;
+  if (!id) throw new Error("ID do card não informado.");
+
+  const sheet = getOrCreateLiberacaoSheet(ss);
+  const rowIndex = findLiberacaoRowById(sheet, id);
+  if (rowIndex === -1) throw new Error("Card não encontrado.");
+
+  const row = sheet.getRange(rowIndex, 1, 1, 14).getValues()[0];
+  const card = liberacaoRowToCard(row);
+
+  if (card.status !== "Liberados") {
+    throw new Error("Só é possível registrar a retirada de PIMs que já estão na coluna Liberados.");
+  }
+  if (card.registradoNoEstoqueEm) {
+    throw new Error("Este PIM já teve a retirada registrada em " + card.registradoNoEstoqueEm + ".");
+  }
+  if (!Array.isArray(card.itens) || card.itens.length === 0) {
+    throw new Error("Este PIM não tem itens (produto/quantidade) identificados para registrar.");
+  }
+
+  const aviso = registrarRetiradaAutomaticaDaLiberacao_(ss, card);
+  if (aviso) {
+    throw new Error(aviso);
+  }
+
+  return true;
 }
 
 /**
@@ -1401,7 +1596,7 @@ function computeLiberacaoCardsJson_() {
   const cards = [];
 
   if (lastRow >= 2) {
-    const values = sheet.getRange(2, 1, lastRow - 1, 13).getValues();
+    const values = sheet.getRange(2, 1, lastRow - 1, 14).getValues();
     values.forEach(function (row) {
       if (!row[0]) return;
       cards.push(liberacaoRowToCard(row));
