@@ -1515,7 +1515,7 @@ function handleLiberacaoRecusar(ss, payload) {
     sheet.getRange(rowIndex, 7).setValue(novoStatus);
     sheet.getRange(rowIndex, 12).setValue("Recusado pelo " + etapa + " em " + nowStr); // L - UltimaAcao
 
-    const updatedRow = sheet.getRange(rowIndex, 1, 1, 13).getValues()[0];
+    const updatedRow = sheet.getRange(rowIndex, 1, 1, 14).getValues()[0];
     return liberacaoRowToCard(updatedRow);
 
   } finally {
