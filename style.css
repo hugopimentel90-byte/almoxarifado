@@ -1884,7 +1884,11 @@ tr:hover td { background-color: var(--bg-primary); }
   }
 
   .chart-card {
-    height: 280px;
+    /* Um pouco mais alto que antes: os rótulos de produto/setor agora quebram
+       em várias linhas em vez de serem cortados, então o eixo com texto
+       ocupa mais espaço vertical/horizontal — precisa de mais altura pro
+       gráfico em si não ficar espremido. */
+    height: 320px;
   }
 
   /*

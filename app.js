@@ -522,6 +522,44 @@ function formatDataLabelValue(value) {
   return Math.ceil(Number(value) || 0).toLocaleString('pt-BR');
 }
 
+/**
+ * Quebra um rótulo longo (nome de produto/setor) em várias linhas, em vez de
+ * deixar o Chart.js cortá-lo com "..." quando não cabe no espaço do eixo —
+ * o mesmo problema que já resolvemos nas tabelas (quebrar em vez de cortar),
+ * só que aqui a "quebra" vira múltiplas linhas de rótulo, já que um gráfico
+ * não tem como rolar texto. Usado via ticks.callback nos eixos de categoria
+ * (nomes de produto/setor); eixos numéricos/de data não precisam disso.
+ */
+function wrapChartLabel(label, maxLineLength = 16, maxLines = 3) {
+  const text = String(label == null ? '' : label).trim();
+  if (!text || text.length <= maxLineLength) return text;
+
+  const words = text.split(/\s+/);
+  const lines = [];
+  let currentLine = '';
+
+  words.forEach(word => {
+    const candidate = currentLine ? `${currentLine} ${word}` : word;
+    if (candidate.length > maxLineLength && currentLine && lines.length < maxLines - 1) {
+      lines.push(currentLine);
+      currentLine = word;
+    } else {
+      currentLine = candidate;
+    }
+  });
+  if (currentLine) lines.push(currentLine);
+
+  return lines;
+}
+
+/**
+ * Callback padrão de ticks.callback para eixos de categoria (nomes de
+ * produto/setor) — usa wrapChartLabel() em cima do rótulo real do tick.
+ */
+function wrappedTickLabel(value) {
+  return wrapChartLabel(this.getLabelForValue(value));
+}
+
 function updateChart(canvasId, type, labels, datasets, options = {}) {
   if (chartInstances[canvasId]) {
     chartInstances[canvasId].destroy();
@@ -632,7 +670,7 @@ function updateCharts() {
     },
     scales: {
       x: { grid: { color: 'rgba(226, 232, 240, 0.4)' }, ticks: { font: { family: 'Inter' } } },
-      y: { grid: { display: false }, ticks: { font: { family: 'Inter' } } }
+      y: { grid: { display: false }, ticks: { font: { family: 'Inter' }, callback: wrappedTickLabel } }
     },
     plugins: {
       datalabels: {
@@ -704,7 +742,7 @@ function updateCharts() {
     },
     scales: {
       y: { grid: { color: 'rgba(226, 232, 240, 0.4)' }, ticks: { font: { family: 'Inter' } } },
-      x: { grid: { display: false }, ticks: { font: { family: 'Inter' } } }
+      x: { grid: { display: false }, ticks: { font: { family: 'Inter' }, callback: wrappedTickLabel } }
     },
     plugins: {
       datalabels: {
@@ -748,7 +786,7 @@ function updateCharts() {
     },
     scales: {
       y: { grid: { color: 'rgba(226, 232, 240, 0.4)' }, ticks: { font: { family: 'Inter' }, precision: 0 } },
-      x: { grid: { display: false }, ticks: { font: { family: 'Inter' } } }
+      x: { grid: { display: false }, ticks: { font: { family: 'Inter' }, callback: wrappedTickLabel } }
     },
     plugins: {
       datalabels: {
