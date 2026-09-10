@@ -1894,22 +1894,31 @@ tr:hover td { background-color: var(--bg-primary); }
   /*
    * Tabelas: no desktop, texto longo é cortado com "..." (nowrap +
    * ellipsis) e a tabela ganha rolagem lateral. No celular isso corta nomes
-   * de produto inteiros sem dar nenhum jeito de ler o resto — em vez de
-   * rolar pro lado numa tela de toque, deixamos o texto quebrar em mais de
-   * uma linha, que é bem mais fácil de usar com o dedo.
+   * de produto inteiros sem dar nenhum jeito de ler o resto.
    */
   th,
   td {
     padding: 0.625rem 0.875rem;
     font-size: 0.8125rem;
-    white-space: normal;
   }
 
-  td {
+  /*
+   * Só a 1ª coluna (nome do produto — sempre a mais longa nas tabelas do
+   * app) quebra em várias linhas. As demais (Unidade, Status, Quantidade...)
+   * continuam numa linha só: são palavras curtas, e uma palavra como
+   * "Disponível" quebrada no meio ("Dispo" / "nível") fica pior do que
+   * simplesmente deixar a coluna estreita — o navegador já encolhe essa
+   * coluna sozinho para dar mais espaço à do produto.
+   */
+  td:first-child,
+  th:first-child {
+    white-space: normal;
     max-width: none;
     overflow: visible;
     text-overflow: clip;
-    word-break: break-word;
+    /* Só quebra no meio da palavra como último recurso (nome sem espaço
+       maior que a tela); prioriza sempre quebrar nos espaços entre palavras. */
+    overflow-wrap: break-word;
   }
 
   .table-title {
