@@ -475,6 +475,7 @@ header {
   display: flex;
   align-items: center;
   gap: 1rem;
+  flex-wrap: wrap;
 }
 
 .btn-refresh {
@@ -585,6 +586,10 @@ header {
   font-size: 0.75rem;
   font-weight: 600;
   color: var(--text-secondary);
+}
+
+.filter-group--wide {
+  min-width: 240px;
 }
 
 .filter-group select,
@@ -787,6 +792,7 @@ header {
 .table-search {
   position: relative;
   width: 300px;
+  max-width: 100%;
 }
 
 .table-search input {
@@ -1526,6 +1532,7 @@ tr:hover td { background-color: var(--bg-primary); }
 .form-actions {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 1rem;
   margin-top: 1rem;
 }
@@ -1766,11 +1773,12 @@ tr:hover td { background-color: var(--bg-primary); }
     flex-direction: row;
     padding: 0.5rem 1rem;
     overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
-  
+
   .menu-link {
     white-space: nowrap;
-    padding: 0.5rem 1rem;
+    padding: 0.625rem 1rem;
   }
   
   .main-content-wrapper {
@@ -1786,6 +1794,194 @@ tr:hover td { background-color: var(--bg-primary); }
   body.sidebar-collapsed .sidebar-logo-text,
   body.sidebar-collapsed .menu-link-text {
     display: inline;
+  }
+}
+
+/*
+ * Responsividade de Componentes — telas de celular (largura ≤ 640px).
+ * O bloco de 900px acima já cuida da estrutura geral (sidebar vira barra
+ * horizontal); este bloco ajusta o conteúdo dentro de cada página para caber
+ * confortavelmente numa tela de celular: cabeçalhos empilham em vez de
+ * espremer, botões ficam largura total (mais fáceis de tocar), tabelas ficam
+ * mais compactas, e modais ganham mais espaço útil de conteúdo.
+ */
+@media (max-width: 640px) {
+  .main-content-wrapper {
+    padding: 1rem 0.75rem;
+  }
+
+  .container {
+    gap: 1.125rem;
+  }
+
+  /* Cabeçalhos de página: título em cima, ações embaixo, ocupando a largura toda */
+  header {
+    padding: 1.125rem 1.25rem;
+  }
+
+  .header-title-container h1 {
+    font-size: 1.25rem;
+  }
+
+  .header-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .header-actions .last-update {
+    width: 100%;
+    text-align: center;
+    order: 3;
+  }
+
+  .header-actions .btn-refresh {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  /* Botão de ação isolado no cabeçalho (ex.: "Novo Documento", "Itens para
+     Pedido de Compra") — ocupa a largura toda em vez de ficar pequeno ao lado do título */
+  header > .btn-refresh {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* Botões de formulário/modal empilhados e com toque mais confortável */
+  .form-actions {
+    flex-direction: column-reverse;
+  }
+
+  .form-actions .btn {
+    width: 100%;
+    padding: 0.75rem 1.25rem;
+  }
+
+  .filter-group--wide {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .table-header-actions {
+    width: 100%;
+  }
+
+  .table-header-actions .filter-group {
+    flex: 1 1 auto;
+  }
+
+  .btn-export-pdf {
+    width: 100%;
+    justify-content: center;
+  }
+
+  /* Cards e painéis com um pouco menos de respiro nas bordas */
+  .filters-panel,
+  .withdrawal-form-card,
+  .kpi-card,
+  .chart-card,
+  .category-card {
+    padding: 1.25rem;
+  }
+
+  .chart-card {
+    height: 280px;
+  }
+
+  /* Tabelas: colunas mais estreitas para reduzir a rolagem lateral */
+  th,
+  td {
+    padding: 0.625rem 0.875rem;
+    font-size: 0.8125rem;
+  }
+
+  td {
+    max-width: 160px;
+  }
+
+  .table-title {
+    font-size: 0.9375rem;
+  }
+
+  /* Modais com menos padding para sobrar mais espaço de conteúdo */
+  .modal-card {
+    padding: 1.25rem;
+    margin: 0.75rem;
+  }
+
+  .modal-title {
+    font-size: 1.0625rem;
+  }
+
+  /* Linha de item da Confirmação de Retirada: de grade lado-a-lado para
+     empilhado, com um rótulo explicando o valor "Disponível" (que antes
+     dependia só do cabeçalho da coluna, que não faz sentido empilhado) */
+  .confirm-items-header {
+    display: none;
+  }
+
+  .confirm-item-row {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.625rem;
+  }
+
+  .confirm-item-qty-wrapper {
+    justify-content: space-between;
+  }
+
+  .confirm-item-available {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.875rem;
+  }
+
+  .confirm-item-available::before {
+    content: "Disponível p/ Retirar:";
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+
+  .confirm-item-row .selected-item-delete-btn {
+    align-self: flex-end;
+  }
+
+  /* Alvos de toque um pouco maiores nos ícones pequenos */
+  .kanban-card-delete {
+    width: 32px;
+    height: 32px;
+  }
+
+  /* Toast não deve encostar nas bordas nem depender de espaço fixo à direita */
+  .toast {
+    left: 1rem;
+    right: 1rem;
+    bottom: 1rem;
+  }
+
+  /*
+   * Campos de texto com menos de 16px de fonte fazem o Safari do iPhone dar
+   * zoom automático na tela inteira assim que o usuário toca neles — um dos
+   * maiores motivos de um site "parecer" não responsivo em celular, mesmo
+   * com o layout certo. Forçar 16px aqui evita esse zoom, sem mudar a
+   * aparência no desktop (essa regra só vale dentro deste @media).
+   */
+  .filter-group select,
+  .filter-group input,
+  .filter-group textarea,
+  .multiselect-btn,
+  .multiselect-search,
+  .table-search input,
+  .quantity-input,
+  .access-gate-field input {
+    font-size: 16px;
+  }
+
+  .filter-group select,
+  .filter-group input,
+  .filter-group textarea {
+    padding: 0.75rem;
   }
 }
 
