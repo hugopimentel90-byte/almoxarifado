@@ -66,6 +66,7 @@ let liberacaoCards = [];
 let liberacaoHistoricoSearchQuery = '';
 let currentLiberacaoCardId = null;
 let currentLiberacaoItems = []; // Itens (Produto/Quantidade) do card aberto no momento, editável só na etapa Encarregado
+let liberacaoRegistrarRetiradaCardId = null; // Card sendo registrado no modal de Setor/Categoria/Tempo
 
 // Lista de colunas obrigatórias
 const REQUIRED_HEADERS = ['produto', 'qtd', 'un', 'data', 'setor', 'pedido', 'mes', 'categoria', 'precomedio'];
@@ -3155,6 +3156,14 @@ function initializeLiberacaoModule() {
     }
   });
 
+  document.getElementById('btnCancelRegistrarRetiradaLiberacao').addEventListener('click', closeRegistrarRetiradaLiberacaoModal);
+  document.getElementById('btnConfirmRegistrarRetiradaLiberacao').addEventListener('click', handleConfirmRegistrarRetiradaLiberacao);
+  document.getElementById('registrarRetiradaLiberacaoModal').addEventListener('click', (e) => {
+    if (e.target.id === 'registrarRetiradaLiberacaoModal') {
+      closeRegistrarRetiradaLiberacaoModal();
+    }
+  });
+
   document.getElementById('liberacaoActionPassword').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -3358,6 +3367,21 @@ function createLiberacaoCardElement(card) {
       </svg>
       <span>${card.nomeArquivo || 'Sem anexo'}</span>
     </div>
+    ${card.status === 'Liberados' ? (card.registradoNoEstoqueEm ? `
+      <div class="kanban-card-meta">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="color: var(--color-success);">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+        </svg>
+        <span style="color: var(--color-success); font-weight: 700;">Registrado em planilha</span>
+      </div>
+    ` : `
+      <div class="kanban-card-meta">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style="color: var(--color-warning);">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+        </svg>
+        <span style="color: var(--color-warning); font-weight: 700;">Retirada não registrada</span>
+      </div>
+    `) : ''}
   `;
 
   if (canDelete) {
@@ -3669,10 +3693,12 @@ function openLiberacaoCardDetail(id) {
   const advanceBtn = document.getElementById('btnLiberacaoAdvance');
   const rejectBtn = document.getElementById('btnLiberacaoReject');
   const registrarRetiradaBtn = document.getElementById('btnLiberacaoRegistrarRetirada');
+  const registradoBadge = document.getElementById('liberacaoRegistradoBadge');
 
   passwordInput.value = '';
   errorEl.classList.add('hidden');
   registrarRetiradaBtn.classList.add('hidden');
+  registradoBadge.classList.add('hidden');
 
   if (card.status === 'Setor') {
     passwordSection.classList.add('hidden');
@@ -3689,12 +3715,14 @@ function openLiberacaoCardDetail(id) {
     advanceBtn.classList.add('hidden');
     rejectBtn.classList.add('hidden');
 
-    // "Liberados" e ainda sem retirada registrada: oferece o botão manual —
-    // usado principalmente pra PIMs que já estavam liberados antes dessa
-    // funcionalidade existir (os novos são registrados automaticamente ao
-    // serem aprovados pelo Imediato).
-    if (card.status === 'Liberados' && !card.registradoNoEstoqueEm && Array.isArray(card.itens) && card.itens.length > 0) {
-      registrarRetiradaBtn.classList.remove('hidden');
+    // "Liberados": ou já foi registrado na planilha (mostra o selo verde),
+    // ou ainda não (mostra o botão pra registrar agora) — nunca os dois.
+    if (card.status === 'Liberados') {
+      if (card.registradoNoEstoqueEm) {
+        registradoBadge.classList.remove('hidden');
+      } else if (Array.isArray(card.itens) && card.itens.length > 0) {
+        registrarRetiradaBtn.classList.remove('hidden');
+      }
     }
   }
 
@@ -3902,13 +3930,6 @@ async function handleLiberacaoAdvance() {
     const resData = await response.json();
     if (resData && resData.status === 'success') {
       showToast("Documento avançou para a próxima etapa!", "success");
-      // Quando o card acabou de virar "Liberados", o backend já tenta lançar
-      // os itens automaticamente na aba Registro (ver registrarRetiradaAuto-
-      // maticaDaLiberacao_ no Code.gs). Se algo mereceu atenção (ex.: item
-      // não encontrado no Estoque, ou saldo insuficiente), avisa aqui.
-      if (resData.card && resData.card.avisoRegistroEstoque) {
-        showToast(resData.card.avisoRegistroEstoque, "warning");
-      }
       closeLiberacaoCardDetail();
       await fetchLiberacaoCards();
     } else {
@@ -3925,25 +3946,87 @@ async function handleLiberacaoAdvance() {
 }
 
 /**
- * Dispara manualmente o lançamento no Registro de um PIM que já está
- * "Liberados" — usado sobretudo para os PIMs que já estavam liberados antes
- * dessa funcionalidade existir (os novos são lançados automaticamente ao
- * serem aprovados pelo Imediato, ver handleLiberacaoAdvance).
+ * Clicado no modal de detalhe do card ("Registrar Retirada no Estoque") —
+ * é o ÚNICO jeito de lançar os itens de um PIM "Liberados" na aba Registro
+ * (não existe lançamento automático). Em vez de lançar direto, abre um
+ * modal pedindo Setor/Categoria/Tempo — mesmos dados coletados na aba
+ * Retirada — que só são gravados depois de confirmados.
  */
-async function handleRegistrarRetiradaDeLiberacao() {
+function handleRegistrarRetiradaDeLiberacao() {
   const card = liberacaoCards.find(c => c.id === currentLiberacaoCardId);
   if (!card) return;
+
+  liberacaoRegistrarRetiradaCardId = card.id;
+  closeLiberacaoCardDetail();
+  openRegistrarRetiradaLiberacaoModal(card);
+}
+
+/**
+ * Preenche o <select> de Setor do modal com os mesmos setores já usados na
+ * aba Retirada (extraídos do histórico em rawData) — em vez de uma lista
+ * fixa, pra sempre bater com o que já existe na planilha.
+ */
+function populateRegistrarRetiradaSetorOptions() {
+  const select = document.getElementById('registrarRetiradaSetor');
+  select.innerHTML = '<option value="">Selecione o setor...</option>';
+
+  const uniqueSectors = [...new Set(rawData.map(item => item.setor))].filter(Boolean).sort();
+  uniqueSectors.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s;
+    opt.textContent = s;
+    select.appendChild(opt);
+  });
+}
+
+function openRegistrarRetiradaLiberacaoModal(card) {
+  document.getElementById('registrarRetiradaLiberacaoTitulo').textContent = card.titulo;
+  populateRegistrarRetiradaSetorOptions();
+  document.getElementById('registrarRetiradaSetor').value = '';
+  document.getElementById('registrarRetiradaCategoria').value = '';
+  document.getElementById('registrarRetiradaTempo').value = '';
+  document.getElementById('registrarRetiradaError').classList.add('hidden');
+  document.getElementById('registrarRetiradaLiberacaoModal').classList.remove('hidden');
+}
+
+function closeRegistrarRetiradaLiberacaoModal() {
+  document.getElementById('registrarRetiradaLiberacaoModal').classList.add('hidden');
+  liberacaoRegistrarRetiradaCardId = null;
+}
+
+/**
+ * Confirma o modal de Setor/Categoria/Tempo e só ENTÃO lança o PIM como
+ * retirada na aba Registro (POST liberacao_registrar_retirada).
+ */
+async function handleConfirmRegistrarRetiradaLiberacao() {
+  const card = liberacaoCards.find(c => c.id === liberacaoRegistrarRetiradaCardId);
+  if (!card) return;
+
+  const errorEl = document.getElementById('registrarRetiradaError');
+  errorEl.classList.add('hidden');
+
+  const setor = document.getElementById('registrarRetiradaSetor').value;
+  const categoria = document.getElementById('registrarRetiradaCategoria').value;
+  const tempoStr = document.getElementById('registrarRetiradaTempo').value.trim();
+
+  if (!setor) {
+    errorEl.textContent = 'Selecione o setor.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  if (!categoria) {
+    errorEl.textContent = 'Selecione a categoria dos itens.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
 
   const confirmed = window.confirm(
     `Lançar os itens do PIM "${card.titulo}" como uma retirada na aba Registro (descontando do Estoque)? Essa ação não pode ser desfeita.`
   );
   if (!confirmed) return;
 
-  const errorEl = document.getElementById('liberacaoDetailError');
-  errorEl.classList.add('hidden');
-
-  const registrarBtn = document.getElementById('btnLiberacaoRegistrarRetirada');
-  setButtonProcessing(registrarBtn, 'Registrando...');
+  const confirmBtn = document.getElementById('btnConfirmRegistrarRetiradaLiberacao');
+  setButtonProcessing(confirmBtn, 'Registrando...');
 
   try {
     const response = await fetch(SCRIPT_URL, {
@@ -3952,13 +4035,19 @@ async function handleRegistrarRetiradaDeLiberacao() {
       headers: {
         'Content-Type': 'text/plain',
       },
-      body: JSON.stringify({ tipo: 'liberacao_registrar_retirada', id: card.id })
+      body: JSON.stringify({
+        tipo: 'liberacao_registrar_retirada',
+        id: card.id,
+        setor: setor,
+        categoria: categoria,
+        tempoRetiradaMinutos: tempoStr === '' ? '' : (parseInt(tempoStr, 10) || 0)
+      })
     });
 
     const resData = await response.json();
     if (resData && resData.status === 'success') {
       showToast("Retirada registrada na aba Registro!", "success");
-      closeLiberacaoCardDetail();
+      closeRegistrarRetiradaLiberacaoModal();
       await fetchLiberacaoCards();
     } else {
       throw new Error(resData.message || "Erro ao registrar a retirada.");
@@ -3968,7 +4057,7 @@ async function handleRegistrarRetiradaDeLiberacao() {
     errorEl.textContent = error.message || "Erro ao registrar a retirada. Tente novamente.";
     errorEl.classList.remove('hidden');
   } finally {
-    clearButtonProcessing(registrarBtn);
+    clearButtonProcessing(confirmBtn);
   }
 }
 

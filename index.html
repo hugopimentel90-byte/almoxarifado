@@ -250,8 +250,9 @@
 
       <p id="liberacaoDetailError" class="modal-error-text hidden"></p>
 
-      <div class="form-actions" style="margin-top: 1.5rem;">
+      <div class="form-actions" style="margin-top: 1.5rem; align-items: center;">
         <button id="btnLiberacaoReject" class="btn btn-secondary hidden">Recusar</button>
+        <span id="liberacaoRegistradoBadge" class="badge badge-success hidden" style="padding: 0.5rem 1rem; font-size: 0.8125rem;">✓ Registrado em planilha</span>
         <button id="btnLiberacaoRegistrarRetirada" class="btn btn-secondary hidden">Registrar Retirada no Estoque</button>
         <button id="btnCloseLiberacaoDetail" class="btn btn-secondary">Fechar</button>
         <button id="btnLiberacaoAdvance" class="btn btn-submit hidden">Ação</button>
@@ -284,6 +285,44 @@
         <button id="btnCancelPedidoObtencao" class="btn btn-secondary">Cancelar</button>
         <button id="btnBaixarPedidoObtencaoPDF" class="btn btn-secondary">Baixar PDF</button>
         <button id="btnEnviarPedidoObtencaoEmail" class="btn btn-submit">Enviar por E-mail</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de Setor/Categoria/Tempo antes de registrar a retirada de um PIM liberado -->
+  <div id="registrarRetiradaLiberacaoModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h2 class="modal-title">Registrar Retirada no Estoque</h2>
+      <p class="modal-subtitle">Informe os dados abaixo para lançar os itens do PIM <strong id="registrarRetiradaLiberacaoTitulo"></strong> como uma retirada na aba Registro.</p>
+
+      <div class="filter-group" style="margin-bottom: 1rem;">
+        <label for="registrarRetiradaSetor">Setor Requisitante</label>
+        <select id="registrarRetiradaSetor">
+          <option value="">Selecione o setor...</option>
+        </select>
+      </div>
+
+      <div class="filter-group" style="margin-bottom: 1rem;">
+        <label for="registrarRetiradaCategoria">Categoria dos Itens</label>
+        <select id="registrarRetiradaCategoria">
+          <option value="">Selecione a categoria...</option>
+          <option value="Produto de limpeza">Produto de limpeza</option>
+          <option value="Escritório">Escritório</option>
+          <option value="Industrial">Industrial</option>
+          <option value="Prefeitura">Prefeitura</option>
+        </select>
+      </div>
+
+      <div class="filter-group">
+        <label for="registrarRetiradaTempo">Tempo da Retirada em minutos (opcional)</label>
+        <input type="number" id="registrarRetiradaTempo" min="0" step="1" placeholder="Ex: 15">
+      </div>
+
+      <p id="registrarRetiradaError" class="modal-error-text hidden"></p>
+
+      <div class="form-actions" style="margin-top: 1.5rem;">
+        <button id="btnCancelRegistrarRetiradaLiberacao" class="btn btn-secondary">Cancelar</button>
+        <button id="btnConfirmRegistrarRetiradaLiberacao" class="btn btn-submit">Registrar</button>
       </div>
     </div>
   </div>

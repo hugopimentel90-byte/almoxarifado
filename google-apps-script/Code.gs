@@ -69,23 +69,25 @@
  *       termine em número é tratada como um item de tabela). Editável pelo
  *       Encarregado (aumentar/diminuir quantidade, excluir item) — a versão
  *       revisada substitui esta coluna ao aprovar; o Imediato só visualiza.
- *   N - Registrado no Estoque em: preenchida automaticamente assim que os
- *       itens (coluna M) desse PIM são lançados como uma retirada na aba
- *       "Registro" (ver registrarRetiradaAutomaticaDaLiberacao_). Vazia
- *       enquanto isso ainda não aconteceu. Existe pra nunca lançar a mesma
- *       retirada duas vezes (o que descontaria o estoque em dobro).
+ *   N - Registrado no Estoque em: preenchida quando os itens (coluna M)
+ *       desse PIM são lançados como uma retirada na aba "Registro" (ver
+ *       registrarRetiradaDaLiberacao_). Vazia enquanto isso ainda não
+ *       aconteceu. Existe pra nunca lançar a mesma retirada duas vezes (o
+ *       que descontaria o estoque em dobro), e também é o que o app usa pra
+ *       decidir se mostra o botão "Registrar Retirada no Estoque" ou o
+ *       aviso "✓ Registrado em planilha" no card.
  *
- *   Assim que um card chega em "Liberados" (aprovado pelo Imediato), os
- *   itens dele (produto/quantidade, já revisados pelo Encarregado) são
- *   lançados automaticamente na aba "Registro" — reaproveitando a MESMA
- *   validação/desconto de estoque de handleRetiradaMaterial (nunca
- *   duplicando essa lógica em dois lugares). Produtos do PIM sem um nome
- *   correspondente exato na aba "Estoque" ainda entram no Registro (pra não
- *   perder a quantidade), mas não têm estoque descontado — nesse caso um
- *   aviso fica registrado na coluna L (UltimaAcao) do próprio card. Também é
- *   possível disparar esse lançamento manualmente (usado para PIMs que já
- *   estavam em "Liberados" antes dessa função existir) pelo botão
- *   correspondente no modal de detalhe do card.
+ *   O lançamento no Registro NÃO acontece sozinho quando o card chega em
+ *   "Liberados" — é sempre manual: o responsável abre o card, clica em
+ *   "Registrar Retirada no Estoque", informa Setor/Categoria/Tempo (os
+ *   mesmos dados pedidos na aba Retirada) e só então os itens (produto/
+ *   quantidade, já revisados pelo Encarregado) são lançados na aba
+ *   "Registro" — reaproveitando a MESMA validação/desconto de estoque de
+ *   handleRetiradaMaterial (nunca duplicando essa lógica em dois lugares).
+ *   Produtos do PIM sem um nome correspondente exato na aba "Estoque" ainda
+ *   entram no Registro (pra não perder a quantidade), mas não têm estoque
+ *   descontado — nesse caso um aviso fica registrado na coluna L
+ *   (UltimaAcao) do próprio card.
  *
  *   O documento anexado é salvo no Google Drive (pasta "Almoxarifado -
  *   Documentos de Liberação"), compartilhado como "qualquer pessoa com o
@@ -1261,14 +1263,18 @@ function handleLiberacaoCriar(ss, payload) {
  * Avança um card para a próxima etapa: Setor -> Encarregado (sem senha),
  * Encarregado -> Imediato (senha do Encarregado), Imediato -> Liberados
  * (senha do Imediato).
+ *
+ * O lançamento no Registro NÃO acontece mais automaticamente aqui quando o
+ * card chega em "Liberados" — só acontece manualmente, pelo botão
+ * "Registrar Retirada no Estoque" no modal de detalhe (ver
+ * handleLiberacaoRegistrarRetirada), depois que o responsável informa
+ * Setor/Categoria/Tempo. Isso dá controle explícito sobre quando o estoque
+ * é de fato descontado, em vez de acontecer sozinho no instante da aprovação.
  */
 function handleLiberacaoAvancar(ss, payload) {
   const sheet = getOrCreateLiberacaoSheet(ss);
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);
-
-  let updatedRow;
-  let transicaoParaLiberados = false;
 
   try {
     const id = payload.id;
@@ -1298,41 +1304,26 @@ function handleLiberacaoAvancar(ss, payload) {
       }
       sheet.getRange(rowIndex, 7).setValue("Liberados");
       sheet.getRange(rowIndex, 11).setValue(nowStr); // K - AprovadoImediatoEm
-      transicaoParaLiberados = true;
     } else {
       throw new Error("Este documento já está liberado e não pode avançar mais.");
     }
 
-    updatedRow = sheet.getRange(rowIndex, 1, 1, 14).getValues()[0];
+    const updatedRow = sheet.getRange(rowIndex, 1, 1, 14).getValues()[0];
+    return liberacaoRowToCard(updatedRow);
 
   } finally {
     lock.releaseLock();
     invalidateLiberacaoCache_();
   }
-
-  const card = liberacaoRowToCard(updatedRow);
-
-  // Só dispara DEPOIS de soltar o lock acima — handleRetiradaMaterial pega o
-  // seu próprio lock, e chamá-lo ainda dentro do lock deste avanço arriscaria
-  // uma disputa desnecessária pelo mesmo recurso na mesma execução.
-  if (transicaoParaLiberados) {
-    const aviso = registrarRetiradaAutomaticaDaLiberacao_(ss, card);
-    if (aviso) {
-      card.avisoRegistroEstoque = aviso;
-    }
-  }
-
-  return card;
 }
 
 /**
  * Lança os itens (produto/quantidade) de um PIM já "Liberados" como uma
  * retirada na aba "Registro", reaproveitando handleRetiradaMaterial (mesma
  * validação de saldo e desconto de estoque usados pela tela de Retirada —
- * nunca duplicando essa lógica). Chamada automaticamente por
- * handleLiberacaoAvancar quando o card acaba de virar "Liberados", e também
- * manualmente por handleLiberacaoRegistrarRetirada (usado para PIMs que já
- * estavam "Liberados" antes dessa função existir).
+ * nunca duplicando essa lógica). Chamada por handleLiberacaoRegistrarRetirada
+ * quando o responsável clica em "Registrar Retirada no Estoque" no modal de
+ * detalhe do card e confirma o Setor/Categoria/Tempo pedidos.
  *
  * Idempotente: se o card já tiver a coluna N (RegistradoNoEstoqueEm)
  * preenchida, não faz nada — evita descontar o estoque duas vezes pro mesmo
@@ -1346,11 +1337,21 @@ function handleLiberacaoAvancar(ss, payload) {
  * falhar pra algum item, um aviso é gravado na coluna L (UltimaAcao) do card
  * e devolvido pro chamador.
  *
+ * @param {Object} overrides Setor/Categoria/Tempo informados no modal antes
+ *   de confirmar — sempre vem preenchido aqui, já validado por
+ *   handleLiberacaoRegistrarRetirada.
+ *   - overrides.setor: usado como Setor (coluna E) de TODAS as linhas
+ *     gravadas no Registro (em vez do Setor do próprio PIM).
+ *   - overrides.categoria: usado como Categoria (coluna J) de TODAS as
+ *     linhas (em vez de tentar resolver pela aba Estoque).
+ *   - overrides.tempoRetiradaMinutos: gravado na coluna L, só na primeira
+ *     linha do lote — mesma convenção usada na aba Retirada.
  * @return {string|null} Uma mensagem de aviso (quando algo merece atenção),
  *   ou null quando tudo correu sem ressalvas (ou não havia nada a fazer).
  */
-function registrarRetiradaAutomaticaDaLiberacao_(ss, card) {
+function registrarRetiradaDaLiberacao_(ss, card, overrides) {
   const sheet = getOrCreateLiberacaoSheet(ss);
+  overrides = overrides || {};
 
   if (card.registradoNoEstoqueEm) {
     return null;
@@ -1389,21 +1390,27 @@ function registrarRetiradaAutomaticaDaLiberacao_(ss, card) {
 
   const dataLancamento = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yy");
   const mesLancamento = new Date().getMonth() + 1;
+  const setorLancamento = overrides.setor || card.setor || '';
   const naoEncontrados = [];
 
-  const items = itensValidos.map(function (item) {
+  const items = itensValidos.map(function (item, index) {
     const info = estoqueSnapshot ? estoqueSnapshot.porNome[item.produto.toLowerCase()] : null;
     if (!info) naoEncontrados.push(item.produto);
-    return {
+    const linha = {
       produto: item.produto,
       qtd: item.qtd,
       un: info ? (info.un || '') : '',
-      categoria: info ? (info.categoria || '') : '',
+      categoria: overrides.categoria || (info ? (info.categoria || '') : ''),
       dataStr: dataLancamento,
-      setor: card.setor || '',
+      setor: setorLancamento,
       pedido: card.titulo || '',
       mes: mesLancamento
     };
+    // Tempo de retirada só na primeira linha do lote — mesma convenção da aba Retirada.
+    if (index === 0 && overrides.tempoRetiradaMinutos !== undefined && overrides.tempoRetiradaMinutos !== '') {
+      linha.tempoRetiradaMinutos = overrides.tempoRetiradaMinutos;
+    }
+    return linha;
   });
 
   try {
@@ -1466,11 +1473,18 @@ function marcarUltimaAcaoLiberacao_(sheet, cardId, texto) {
  * Dispara manualmente o lançamento no Registro de um PIM que já está
  * "Liberados" — usado para PIMs aprovados antes dessa funcionalidade existir
  * (não passaram pelo gatilho automático de handleLiberacaoAvancar). Chamado
- * pelo botão "Registrar Retirada no Estoque" no modal de detalhe do card.
+ * pelo botão "Registrar Retirada no Estoque" no modal de detalhe do card,
+ * depois de o usuário informar Setor/Categoria/Tempo no modal seguinte —
+ * exatamente os mesmos dados coletados na aba Retirada.
  */
 function handleLiberacaoRegistrarRetirada(ss, payload) {
   const id = payload.id;
   if (!id) throw new Error("ID do card não informado.");
+
+  const setor = String(payload.setor || '').trim();
+  const categoria = String(payload.categoria || '').trim();
+  if (!setor) throw new Error("Selecione o setor.");
+  if (!categoria) throw new Error("Selecione a categoria dos itens.");
 
   const sheet = getOrCreateLiberacaoSheet(ss);
   const rowIndex = findLiberacaoRowById(sheet, id);
@@ -1489,7 +1503,15 @@ function handleLiberacaoRegistrarRetirada(ss, payload) {
     throw new Error("Este PIM não tem itens (produto/quantidade) identificados para registrar.");
   }
 
-  const aviso = registrarRetiradaAutomaticaDaLiberacao_(ss, card);
+  const overrides = {
+    setor: setor,
+    categoria: categoria,
+    tempoRetiradaMinutos: (payload.tempoRetiradaMinutos !== undefined && payload.tempoRetiradaMinutos !== '')
+      ? (Number(payload.tempoRetiradaMinutos) || 0)
+      : ''
+  };
+
+  const aviso = registrarRetiradaDaLiberacao_(ss, card, overrides);
   if (aviso) {
     throw new Error(aviso);
   }
