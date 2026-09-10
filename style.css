@@ -1887,15 +1887,25 @@ tr:hover td { background-color: var(--bg-primary); }
     height: 280px;
   }
 
-  /* Tabelas: colunas mais estreitas para reduzir a rolagem lateral */
+  /*
+   * Tabelas: no desktop, texto longo é cortado com "..." (nowrap +
+   * ellipsis) e a tabela ganha rolagem lateral. No celular isso corta nomes
+   * de produto inteiros sem dar nenhum jeito de ler o resto — em vez de
+   * rolar pro lado numa tela de toque, deixamos o texto quebrar em mais de
+   * uma linha, que é bem mais fácil de usar com o dedo.
+   */
   th,
   td {
     padding: 0.625rem 0.875rem;
     font-size: 0.8125rem;
+    white-space: normal;
   }
 
   td {
-    max-width: 160px;
+    max-width: none;
+    overflow: visible;
+    text-overflow: clip;
+    word-break: break-word;
   }
 
   .table-title {
