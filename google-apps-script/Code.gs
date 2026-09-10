@@ -1356,7 +1356,15 @@ function registrarRetiradaAutomaticaDaLiberacao_(ss, card) {
     return null;
   }
 
-  const itensValidos = (Array.isArray(card.itens) ? card.itens : [])
+  const itensBrutos = Array.isArray(card.itens) ? card.itens : [];
+
+  if (itensBrutos.length === 0) {
+    const aviso = 'Nenhum item (produto/quantidade) está associado a este PIM — nada foi lançado no Registro.';
+    marcarUltimaAcaoLiberacao_(sheet, card.id, aviso);
+    return aviso;
+  }
+
+  const itensValidos = itensBrutos
     .map(function (item) {
       const produto = String((item && item.produto) || '').trim();
       const qtd = Number(item && item.qtd) || 0;
@@ -1364,8 +1372,16 @@ function registrarRetiradaAutomaticaDaLiberacao_(ss, card) {
     })
     .filter(function (i) { return i; });
 
+  // Importante: NÃO retornar null aqui (silenciosamente "sem nada a fazer")
+  // quando itensBrutos não é vazio mas nenhum item sobrou depois de validado
+  // — isso já causou uma "falsa mensagem de sucesso" no botão manual (que só
+  // vira erro quando esta função devolve um aviso). Um aviso explícito é
+  // sempre mais seguro do que um silêncio que parece sucesso.
   if (itensValidos.length === 0) {
-    return null;
+    const aviso = 'Os itens deste PIM não têm produto/quantidade válidos (nome vazio ou quantidade zero) — ' +
+      'nada foi lançado no Registro. Reabra o card e confira a seção "Itens do Documento".';
+    marcarUltimaAcaoLiberacao_(sheet, card.id, aviso);
+    return aviso;
   }
 
   const estoqueSheet = ss.getSheetByName(ESTOQUE_SHEET_NAME);
