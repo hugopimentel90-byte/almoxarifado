@@ -956,6 +956,36 @@
             <div class="kanban-column-body" id="kanbanColumnLiberados"></div>
           </div>
         </div>
+
+        <!-- Histórico de PIMs liberados há mais de 3 dias: saem do quadro Kanban
+             acima (que fica só com os mais recentes) e passam a aparecer aqui,
+             em forma de tabela, com filtro por número do PIM e link pro PDF. -->
+        <section class="table-card" style="margin-top: 1.5rem;">
+          <div class="table-header">
+            <div class="table-title">Histórico de PIMs Liberados</div>
+            <div class="table-search">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+              </svg>
+              <input type="text" id="liberacaoHistoricoSearch" placeholder="Buscar por número do PIM...">
+            </div>
+          </div>
+
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Número do PIM</th>
+                  <th>Setor Requisitante</th>
+                  <th>Data de Liberação</th>
+                </tr>
+              </thead>
+              <tbody id="liberacaoHistoricoTableBody">
+                <tr><td colspan="3" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Nenhum PIM no histórico ainda</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
       </main>
 
       <!-- ABA 6: PONTO DE PEDIDO (acesso restrito ao perfil administrador) -->

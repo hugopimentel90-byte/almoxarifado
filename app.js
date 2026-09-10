@@ -57,7 +57,13 @@ let pedidoObtencaoItems = []; // Itens candidatos ao pedido atual: { produto, es
 
 // Estado da Aba de Liberação de Documentos
 const LIBERACAO_COLUMNS = ['Setor', 'Encarregado', 'Imediato', 'Liberados'];
+// Depois de aprovado pelo Imediato, um PIM fica no máximo esse tanto de dias
+// visível no card do Kanban (coluna "Liberados") — depois disso, passa a
+// aparecer só na tabela de Histórico logo abaixo do quadro, pra a coluna não
+// virar uma lista enorme de rolar com o passar do tempo.
+const LIBERACAO_HISTORICO_DIAS = 3;
 let liberacaoCards = [];
+let liberacaoHistoricoSearchQuery = '';
 let currentLiberacaoCardId = null;
 let currentLiberacaoItems = []; // Itens (Produto/Quantidade) do card aberto no momento, editável só na etapa Encarregado
 
@@ -3154,6 +3160,11 @@ function initializeLiberacaoModule() {
       handleLiberacaoAdvance();
     }
   });
+
+  document.getElementById('liberacaoHistoricoSearch').addEventListener('input', (e) => {
+    liberacaoHistoricoSearchQuery = e.target.value;
+    renderLiberacaoHistorico();
+  });
 }
 
 async function fetchLiberacaoCards() {
@@ -3190,6 +3201,111 @@ async function fetchLiberacaoCards() {
   renderLiberacaoBoard();
 }
 
+/**
+ * Converte o timestamp "dd/MM/yy HH:mm" gravado pelo backend (ver
+ * formatLiberacaoTimestamp no Code.gs) para um objeto Date, incluindo a
+ * hora. É uma função separada da parseDate() genérica (usada nos dados da
+ * planilha Registro) porque aquela ignora a hora — o que não serviria aqui,
+ * já que a janela de "N dias no Kanban" precisa ser precisa (relativa ao
+ * momento exato da liberação, não só ao dia).
+ */
+function parseLiberacaoTimestamp(str) {
+  if (!str) return null;
+  const match = String(str).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s+(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+
+  const day = parseInt(match[1], 10);
+  const month = parseInt(match[2], 10) - 1;
+  let year = parseInt(match[3], 10);
+  if (year < 100) year += 2000;
+  const hour = parseInt(match[4], 10);
+  const minute = parseInt(match[5], 10);
+
+  const date = new Date(year, month, day, hour, minute);
+  return isNaN(date.getTime()) ? null : date;
+}
+
+/**
+ * true quando um card "Liberados" já passou de LIBERACAO_HISTORICO_DIAS dias
+ * desde a aprovação do Imediato — nesse caso ele sai do Kanban (ver
+ * renderLiberacaoBoard) e passa a aparecer só na tabela de Histórico (ver
+ * renderLiberacaoHistorico). Se a data não puder ser lida por algum motivo,
+ * o card É MANTIDO no Kanban por segurança — melhor aparecer ali do que
+ * sumir sem explicação nos dois lugares.
+ */
+function isLiberacaoHistorico(card) {
+  const liberadoEm = parseLiberacaoTimestamp(card.aprovadoImediatoEm);
+  if (!liberadoEm) return false;
+  const limiteMs = LIBERACAO_HISTORICO_DIAS * 24 * 60 * 60 * 1000;
+  return (Date.now() - liberadoEm.getTime()) > limiteMs;
+}
+
+/**
+ * Tabela de PIMs liberados há mais de LIBERACAO_HISTORICO_DIAS dias, com
+ * filtro por número do PIM e um link que abre o PDF original (mesmo arquivo
+ * do Google Drive já usado no "Abrir Documento" do modal de detalhe).
+ */
+function renderLiberacaoHistorico() {
+  const tbody = document.getElementById('liberacaoHistoricoTableBody');
+  if (!tbody) return;
+
+  const liberados = liberacaoCards.filter(c => c.status === 'Liberados');
+  let items = liberados.filter(isLiberacaoHistorico);
+
+  const query = liberacaoHistoricoSearchQuery.trim().toLowerCase();
+  if (query) {
+    items = items.filter(c => String(c.titulo || '').toLowerCase().includes(query));
+  }
+
+  // Mais recentes primeiro
+  items = items.slice().sort((a, b) => {
+    const da = parseLiberacaoTimestamp(a.aprovadoImediatoEm);
+    const db = parseLiberacaoTimestamp(b.aprovadoImediatoEm);
+    return (db ? db.getTime() : 0) - (da ? da.getTime() : 0);
+  });
+
+  tbody.innerHTML = '';
+
+  if (items.length === 0) {
+    const message = query
+      ? 'Nenhum PIM encontrado para essa busca'
+      : 'Nenhum PIM no histórico ainda';
+    tbody.innerHTML = `<tr><td colspan="3" style="text-align: center; color: var(--text-secondary); padding: 2rem;">${message}</td></tr>`;
+    return;
+  }
+
+  items.forEach(card => {
+    const tr = document.createElement('tr');
+
+    const pimCell = document.createElement('td');
+    if (card.urlArquivo) {
+      const link = document.createElement('a');
+      link.href = card.urlArquivo;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = card.titulo;
+      link.title = 'Abrir/baixar o PDF deste PIM';
+      link.style.color = 'var(--color-primary)';
+      link.style.fontWeight = '600';
+      pimCell.appendChild(link);
+    } else {
+      pimCell.textContent = card.titulo;
+      pimCell.title = 'Sem documento anexado';
+    }
+    tr.appendChild(pimCell);
+
+    const setorCell = document.createElement('td');
+    setorCell.textContent = card.setor;
+    tr.appendChild(setorCell);
+
+    const dataCell = document.createElement('td');
+    dataCell.textContent = card.aprovadoImediatoEm || '—';
+    tr.appendChild(dataCell);
+
+    tbody.appendChild(tr);
+  });
+}
+
 function renderLiberacaoBoard() {
   LIBERACAO_COLUMNS.forEach(status => {
     const container = document.getElementById(`kanbanColumn${status}`);
@@ -3197,7 +3313,11 @@ function renderLiberacaoBoard() {
     if (!container) return;
 
     container.innerHTML = '';
-    const cardsInColumn = liberacaoCards.filter(c => c.status === status);
+    let cardsInColumn = liberacaoCards.filter(c => c.status === status);
+    if (status === 'Liberados') {
+      // Os que já passaram do prazo saem do Kanban e vão pro Histórico abaixo.
+      cardsInColumn = cardsInColumn.filter(c => !isLiberacaoHistorico(c));
+    }
     countEl.textContent = cardsInColumn.length;
 
     if (cardsInColumn.length === 0) {
@@ -3209,6 +3329,8 @@ function renderLiberacaoBoard() {
       container.appendChild(createLiberacaoCardElement(card));
     });
   });
+
+  renderLiberacaoHistorico();
 }
 
 function createLiberacaoCardElement(card) {
