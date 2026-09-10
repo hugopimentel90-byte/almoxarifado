@@ -707,14 +707,24 @@ function handleRetiradaMaterial(ss, items) {
         novaBase -= deductBase;
         remaining -= deductBase;
 
+        // touchedCount conta só as colunas de entrada que o laço abaixo
+        // realmente PRECISOU usar pra cobrir a retirada. As colunas de
+        // entrada que sobram depois disso (ex.: a retirada coube inteira na
+        // base, ou parou na coluna G) ficam de fora da escrita — em vez de
+        // reescrever a linha inteira até a última coluna de entrada da aba
+        // (que pode ser bem mais larga por causa de OUTRO produto), o que
+        // convertia célula em branco em "0" numérico sem necessidade.
         const novasEntradas = info.entradaColunas.slice();
+        let touchedCount = 0;
         for (let i = 0; i < novasEntradas.length && remaining > 0; i++) {
           const deduct = Math.min(novasEntradas[i], remaining);
           novasEntradas[i] -= deduct;
           remaining -= deduct;
+          touchedCount = i + 1;
         }
 
-        const linhaValores = [novaBase, info.categoria, info.codigoBarras, info.pontoPedido].concat(novasEntradas);
+        const linhaValores = [novaBase, info.categoria, info.codigoBarras, info.pontoPedido]
+          .concat(novasEntradas.slice(0, touchedCount));
         estoqueSheet.getRange(info.row, 3, 1, linhaValores.length).setValues([linhaValores]);
       });
     }
