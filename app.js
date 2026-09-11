@@ -3236,14 +3236,22 @@ function parseLiberacaoTimestamp(str) {
 }
 
 /**
- * true quando um card "Liberados" já passou de LIBERACAO_HISTORICO_DIAS dias
- * desde a aprovação do Imediato — nesse caso ele sai do Kanban (ver
- * renderLiberacaoBoard) e passa a aparecer só na tabela de Histórico (ver
- * renderLiberacaoHistorico). Se a data não puder ser lida por algum motivo,
- * o card É MANTIDO no Kanban por segurança — melhor aparecer ali do que
- * sumir sem explicação nos dois lugares.
+ * true quando um card "Liberados" deve sair do Kanban e passar a aparecer só
+ * na tabela de Histórico (ver renderLiberacaoHistorico), por um destes dois
+ * motivos:
+ *   1. A retirada dos itens já foi registrada na aba Registro (botão
+ *      "Registrar Retirada no Estoque") — nesse caso não faz sentido esperar
+ *      os LIBERACAO_HISTORICO_DIAS dias, o card já "concluiu o ciclo".
+ *   2. Já passou de LIBERACAO_HISTORICO_DIAS dias desde a aprovação do
+ *      Imediato, mesmo que a retirada ainda não tenha sido registrada — pra
+ *      não deixar o Kanban acumulando PIMs aprovados indefinidamente.
+ * Se a data não puder ser lida por algum motivo, o card É MANTIDO no Kanban
+ * por segurança — melhor aparecer ali do que sumir sem explicação nos dois
+ * lugares.
  */
 function isLiberacaoHistorico(card) {
+  if (card.registradoNoEstoqueEm) return true;
+
   const liberadoEm = parseLiberacaoTimestamp(card.aprovadoImediatoEm);
   if (!liberadoEm) return false;
   const limiteMs = LIBERACAO_HISTORICO_DIAS * 24 * 60 * 60 * 1000;

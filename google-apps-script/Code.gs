@@ -1412,6 +1412,11 @@ function registrarRetiradaDaLiberacao_(ss, card, overrides) {
       un: info ? (info.un || '') : '',
       categoria: overrides.categoria || (info ? (info.categoria || '') : ''),
       dataStr: dataLancamento,
+      // "Pago em" (coluna H) recebe a mesma data do lançamento (coluna D):
+      // esse fluxo (Liberação) não pede uma data de pagamento separada como
+      // a aba Retirada pede (ver confirmPagoEm em app.js) — sem isso, a
+      // coluna H ficava em branco pra todo PIM registrado por aqui.
+      pagoEm: dataLancamento,
       setor: setorLancamento,
       pedido: card.titulo || '',
       mes: mesLancamento
