@@ -2128,6 +2128,31 @@ tr:hover td { background-color: var(--bg-primary); }
   height: 15px;
 }
 
+/* Botão "Registrar retirada" na coluna de status da tabela de Histórico de
+   Liberação — mesma cor de aviso usada no card do Kanban, mas clicável, já
+   que aqui é a única forma de registrar um PIM que já saiu do quadro. */
+.btn-link-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--color-warning);
+  font-weight: 700;
+  font-size: inherit;
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  transition: var(--transition);
+}
+
+.btn-link-warning:hover {
+  color: #b45309;
+}
+
 .kanban-card-title {
   font-size: 0.875rem;
   font-weight: 700;

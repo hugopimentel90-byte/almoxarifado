@@ -3288,7 +3288,7 @@ function renderLiberacaoHistorico() {
     const message = query
       ? 'Nenhum PIM encontrado para essa busca'
       : 'Nenhum PIM no histórico ainda';
-    tbody.innerHTML = `<tr><td colspan="3" style="text-align: center; color: var(--text-secondary); padding: 2rem;">${message}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">${message}</td></tr>`;
     return;
   }
 
@@ -3320,8 +3320,53 @@ function renderLiberacaoHistorico() {
     dataCell.textContent = card.aprovadoImediatoEm || '—';
     tr.appendChild(dataCell);
 
+    tr.appendChild(createLiberacaoRetiradaStatusCell(card));
+
     tbody.appendChild(tr);
   });
+}
+
+/**
+ * Célula de status da retirada na tabela de Histórico — mesmo par de estados
+ * já usado no card do Kanban (ver createLiberacaoCardElement): "Registrado em
+ * planilha" (verde) quando já foi lançado, ou "Registrar retirada" (âmbar,
+ * clicável) quando ainda não foi. Isso existe porque muitos PIMs vão passar
+ * dos 3 dias e cair no histórico sem que ninguém tenha clicado em "Registrar
+ * Retirada no Estoque" no card antes disso — sem essa coluna, o único jeito
+ * de perceber e registrar seria abrir o card, e ele nem aparece mais aqui.
+ */
+function createLiberacaoRetiradaStatusCell(card) {
+  const td = document.createElement('td');
+
+  if (card.registradoNoEstoqueEm) {
+    td.innerHTML = `
+      <span style="display: inline-flex; align-items: center; gap: 0.35rem; color: var(--color-success); font-weight: 700; white-space: nowrap;">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+        </svg>
+        Registrado em planilha
+      </span>
+    `;
+    return td;
+  }
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn-link-warning';
+  btn.title = 'Este PIM ainda não teve a retirada lançada na aba Registro — clique para registrar agora.';
+  btn.innerHTML = `
+    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+    </svg>
+    Registrar retirada
+  `;
+  btn.addEventListener('click', () => {
+    liberacaoRegistrarRetiradaCardId = card.id;
+    openRegistrarRetiradaLiberacaoModal(card);
+  });
+
+  td.appendChild(btn);
+  return td;
 }
 
 function renderLiberacaoBoard() {
