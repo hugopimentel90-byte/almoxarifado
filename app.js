@@ -62,8 +62,12 @@ const LIBERACAO_COLUMNS = ['Setor', 'Encarregado', 'Imediato', 'Liberados'];
 // aparecer só na tabela de Histórico logo abaixo do quadro, pra a coluna não
 // virar uma lista enorme de rolar com o passar do tempo.
 const LIBERACAO_HISTORICO_DIAS = 3;
+// Quantos PIMs a tabela de Histórico mostra por página — o resto só aparece
+// ao trocar de página na paginação abaixo da tabela.
+const LIBERACAO_HISTORICO_PAGE_SIZE = 15;
 let liberacaoCards = [];
 let liberacaoHistoricoSearchQuery = '';
+let liberacaoHistoricoPage = 1;
 let currentLiberacaoCardId = null;
 let currentLiberacaoItems = []; // Itens (Produto/Quantidade) do card aberto no momento, editável só na etapa Encarregado
 let liberacaoRegistrarRetiradaCardId = null; // Card sendo registrado no modal de Setor/Categoria/Tempo
@@ -3173,6 +3177,7 @@ function initializeLiberacaoModule() {
 
   document.getElementById('liberacaoHistoricoSearch').addEventListener('input', (e) => {
     liberacaoHistoricoSearchQuery = e.target.value;
+    liberacaoHistoricoPage = 1; // Nova busca sempre volta pra primeira página
     renderLiberacaoHistorico();
   });
 }
@@ -3260,8 +3265,9 @@ function isLiberacaoHistorico(card) {
 
 /**
  * Tabela de PIMs liberados há mais de LIBERACAO_HISTORICO_DIAS dias, com
- * filtro por número do PIM e um link que abre o PDF original (mesmo arquivo
- * do Google Drive já usado no "Abrir Documento" do modal de detalhe).
+ * filtro por número do PIM, paginação de LIBERACAO_HISTORICO_PAGE_SIZE PIMs
+ * por página, e um link que abre o PDF original (mesmo arquivo do Google
+ * Drive já usado no "Abrir Documento" do modal de detalhe).
  */
 function renderLiberacaoHistorico() {
   const tbody = document.getElementById('liberacaoHistoricoTableBody');
@@ -3289,10 +3295,21 @@ function renderLiberacaoHistorico() {
       ? 'Nenhum PIM encontrado para essa busca'
       : 'Nenhum PIM no histórico ainda';
     tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">${message}</td></tr>`;
+    renderLiberacaoHistoricoPagination(0);
     return;
   }
 
-  items.forEach(card => {
+  // Garante que a página atual ainda existe (ex.: filtro/exclusão reduziu o
+  // total de páginas enquanto o usuário estava numa página mais adiante).
+  const totalPages = Math.max(1, Math.ceil(items.length / LIBERACAO_HISTORICO_PAGE_SIZE));
+  if (liberacaoHistoricoPage > totalPages) {
+    liberacaoHistoricoPage = totalPages;
+  }
+
+  const startIndex = (liberacaoHistoricoPage - 1) * LIBERACAO_HISTORICO_PAGE_SIZE;
+  const pageItems = items.slice(startIndex, startIndex + LIBERACAO_HISTORICO_PAGE_SIZE);
+
+  pageItems.forEach(card => {
     const tr = document.createElement('tr');
 
     const pimCell = document.createElement('td');
@@ -3324,6 +3341,53 @@ function renderLiberacaoHistorico() {
 
     tbody.appendChild(tr);
   });
+
+  renderLiberacaoHistoricoPagination(items.length);
+}
+
+/**
+ * Renderiza os botões de página (1, 2, 3...) abaixo da tabela de Histórico,
+ * a partir do total de PIMs já filtrados pela busca (totalItems). Some
+ * inteiramente quando cabe tudo numa página só.
+ */
+function renderLiberacaoHistoricoPagination(totalItems) {
+  const container = document.getElementById('liberacaoHistoricoPagination');
+  if (!container) return;
+
+  container.innerHTML = '';
+
+  const totalPages = Math.ceil(totalItems / LIBERACAO_HISTORICO_PAGE_SIZE);
+  if (totalPages <= 1) return;
+
+  const goToPage = (page) => {
+    liberacaoHistoricoPage = page;
+    renderLiberacaoHistorico();
+  };
+
+  const prevBtn = document.createElement('button');
+  prevBtn.type = 'button';
+  prevBtn.className = 'pagination-btn pagination-nav';
+  prevBtn.textContent = 'Anterior';
+  prevBtn.disabled = liberacaoHistoricoPage === 1;
+  prevBtn.addEventListener('click', () => goToPage(liberacaoHistoricoPage - 1));
+  container.appendChild(prevBtn);
+
+  for (let page = 1; page <= totalPages; page++) {
+    const pageBtn = document.createElement('button');
+    pageBtn.type = 'button';
+    pageBtn.className = 'pagination-btn' + (page === liberacaoHistoricoPage ? ' active' : '');
+    pageBtn.textContent = String(page);
+    pageBtn.addEventListener('click', () => goToPage(page));
+    container.appendChild(pageBtn);
+  }
+
+  const nextBtn = document.createElement('button');
+  nextBtn.type = 'button';
+  nextBtn.className = 'pagination-btn pagination-nav';
+  nextBtn.textContent = 'Próxima';
+  nextBtn.disabled = liberacaoHistoricoPage === totalPages;
+  nextBtn.addEventListener('click', () => goToPage(liberacaoHistoricoPage + 1));
+  container.appendChild(nextBtn);
 }
 
 /**
