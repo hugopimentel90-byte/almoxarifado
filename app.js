@@ -3567,6 +3567,13 @@ async function extractProductQuantityFromPdf(file) {
     // INCUMB. no final (ex.: "310") são apenas exigidos no formato, não usados.
     const ROW_END_REGEX = /^(.*?)\s+[A-ZÇÃÕÁÉÍÓÚÂÊÔÀ]{2,10}\s+(\d+(?:[.,]\d+)?)\s+\S+\s+\d+\s*$/u;
 
+    // Alguns PIMs trazem, antes do nome do material propriamente dito, uma
+    // observação fixa do tipo "NÃO DEVE SER ..." (nota de especificação do
+    // SISTOQUE, ex.: "NÃO DEVE SER SIMILAR - DETERGENTE LIQUIDO NEUTRO") que
+    // fica na mesma linha visual da descrição e acaba grudada no início dela.
+    // Remove esse prefixo pra sobrar só o nome real do produto.
+    const NOISE_PRODUCT_PREFIX_REGEX = /^n[ãa]o\s+deve\s+ser\b[^a-zà-ú0-9]*/iu;
+
     const parsedItems = [];
     let pendingDescription = null;
 
@@ -3575,7 +3582,7 @@ async function extractProductQuantityFromPdf(file) {
       const endMatch = pendingDescription.match(ROW_END_REGEX);
       if (!endMatch) return;
 
-      const produto = endMatch[1].trim();
+      const produto = endMatch[1].trim().replace(NOISE_PRODUCT_PREFIX_REGEX, '').trim();
       const qtd = Math.round(parseFloat(endMatch[2].replace(',', '.')));
       if (produto && qtd > 0) {
         parsedItems.push({ produto, qtd });
