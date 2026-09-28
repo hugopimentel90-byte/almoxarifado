@@ -4164,6 +4164,7 @@ function openRegistrarRetiradaLiberacaoModal(card) {
   document.getElementById('registrarRetiradaSetor').value = '';
   document.getElementById('registrarRetiradaCategoria').value = '';
   document.getElementById('registrarRetiradaTempo').value = '';
+  document.getElementById('registrarRetiradaSenha').value = '';
   document.getElementById('registrarRetiradaError').classList.add('hidden');
   document.getElementById('registrarRetiradaLiberacaoModal').classList.remove('hidden');
 }
@@ -4187,6 +4188,7 @@ async function handleConfirmRegistrarRetiradaLiberacao() {
   const setor = document.getElementById('registrarRetiradaSetor').value;
   const categoria = document.getElementById('registrarRetiradaCategoria').value;
   const tempoStr = document.getElementById('registrarRetiradaTempo').value.trim();
+  const senha = document.getElementById('registrarRetiradaSenha').value;
 
   if (!setor) {
     errorEl.textContent = 'Selecione o setor.';
@@ -4195,6 +4197,11 @@ async function handleConfirmRegistrarRetiradaLiberacao() {
   }
   if (!categoria) {
     errorEl.textContent = 'Selecione a categoria dos itens.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  if (!senha) {
+    errorEl.textContent = 'Informe a senha da Diretoria.';
     errorEl.classList.remove('hidden');
     return;
   }
@@ -4219,7 +4226,8 @@ async function handleConfirmRegistrarRetiradaLiberacao() {
         id: card.id,
         setor: setor,
         categoria: categoria,
-        tempoRetiradaMinutos: tempoStr === '' ? '' : (parseInt(tempoStr, 10) || 0)
+        tempoRetiradaMinutos: tempoStr === '' ? '' : (parseInt(tempoStr, 10) || 0),
+        senha: senha
       })
     });
 
@@ -4235,6 +4243,7 @@ async function handleConfirmRegistrarRetiradaLiberacao() {
     console.error("Erro ao registrar retirada de liberação:", error);
     errorEl.textContent = error.message || "Erro ao registrar a retirada. Tente novamente.";
     errorEl.classList.remove('hidden');
+    document.getElementById('registrarRetiradaSenha').value = '';
   } finally {
     clearButtonProcessing(confirmBtn);
   }

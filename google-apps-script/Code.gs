@@ -80,9 +80,11 @@
  *   O lançamento no Registro NÃO acontece sozinho quando o card chega em
  *   "Liberados" — é sempre manual: o responsável abre o card, clica em
  *   "Registrar Retirada no Estoque", informa Setor/Categoria/Tempo (os
- *   mesmos dados pedidos na aba Retirada) e só então os itens (produto/
- *   quantidade, já revisados pelo Encarregado) são lançados na aba
- *   "Registro" — reaproveitando a MESMA validação/desconto de estoque de
+ *   mesmos dados pedidos na aba Retirada) MAIS a senha da Diretoria
+ *   (LIBERACAO_DIRETORIA_PASSWORD — a mesma usada pro perfil "completo" na
+ *   tela de acesso do site) e só então os itens (produto/quantidade, já
+ *   revisados pelo Encarregado) são lançados na aba "Registro" —
+ *   reaproveitando a MESMA validação/desconto de estoque de
  *   handleRetiradaMaterial (nunca duplicando essa lógica em dois lugares).
  *   Produtos do PIM sem um nome correspondente exato na aba "Estoque" ainda
  *   entram no Registro (pra não perder a quantidade), mas não têm estoque
@@ -119,6 +121,12 @@ const LIBERACAO_SHEET_NAME = "Liberacao";
 const LIBERACAO_DRIVE_FOLDER_NAME = "Almoxarifado - Documentos de Liberação";
 const LIBERACAO_ENCARREGADO_PASSWORD = "encarregado321";
 const LIBERACAO_IMEDIATO_PASSWORD = "imediato321";
+// Exigida pra lançar a retirada de um PIM liberado no Registro (ver
+// handleLiberacaoRegistrarRetirada) — ação que desconta o estoque de
+// verdade, por isso fica restrita ao mesmo perfil "completo" usado pra
+// entrar no site (ACCESS_GATE_PASSWORD em app.js), e não a qualquer um que
+// consiga abrir o card no Kanban.
+const LIBERACAO_DIRETORIA_PASSWORD = "diretoria321";
 
 /**
  * Aba "Demanda" — dados de fornecimento usados para montar o Pedido de
@@ -1495,6 +1503,10 @@ function marcarUltimaAcaoLiberacao_(sheet, cardId, texto) {
 function handleLiberacaoRegistrarRetirada(ss, payload) {
   const id = payload.id;
   if (!id) throw new Error("ID do card não informado.");
+
+  if (payload.senha !== LIBERACAO_DIRETORIA_PASSWORD) {
+    throw new Error("Senha da Diretoria incorreta.");
+  }
 
   const setor = String(payload.setor || '').trim();
   const categoria = String(payload.categoria || '').trim();
