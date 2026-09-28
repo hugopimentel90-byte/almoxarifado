@@ -2203,6 +2203,31 @@ tr:hover td { background-color: var(--bg-primary); }
   color: #b45309;
 }
 
+/* Mesmo botão-link acima, mas pro badge "Registrado em planilha" na tabela
+   de Histórico — clicável pra abrir o modal em modo somente-leitura e
+   consultar os itens já lançados no Registro. */
+.btn-link-success {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--color-success);
+  font-weight: 700;
+  font-size: inherit;
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  transition: var(--transition);
+}
+
+.btn-link-success:hover {
+  color: #047857;
+}
+
 .kanban-card-title {
   font-size: 0.875rem;
   font-weight: 700;

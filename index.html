@@ -289,33 +289,49 @@
     </div>
   </div>
 
-  <!-- Modal de Setor/Categoria/Tempo antes de registrar a retirada de um PIM liberado -->
+  <!-- Modal de Setor/Categoria/Tempo antes de registrar a retirada de um PIM liberado.
+       Também funciona em modo somente-leitura (ver openRegistrarRetiradaLiberacaoModal em
+       app.js) quando o PIM clicado no Histórico já teve a retirada registrada — nesse caso
+       os campos do formulário somem e só a lista de itens + data do registro aparecem. -->
   <div id="registrarRetiradaLiberacaoModal" class="modal-overlay hidden">
     <div class="modal-card">
       <h2 class="modal-title">Registrar Retirada no Estoque</h2>
-      <p class="modal-subtitle">Informe os dados abaixo para lançar os itens do PIM <strong id="registrarRetiradaLiberacaoTitulo"></strong> como uma retirada na aba Registro.</p>
+      <p class="modal-subtitle">
+        <span id="registrarRetiradaLiberacaoSubtitlePrefix">Informe os dados abaixo para lançar os itens do PIM</span>
+        <strong id="registrarRetiradaLiberacaoTitulo"></strong>
+        <span id="registrarRetiradaLiberacaoSubtitleSuffix">como uma retirada na aba Registro.</span>
+      </p>
 
-      <div class="filter-group" style="margin-bottom: 1rem;">
-        <label for="registrarRetiradaSetor">Setor Requisitante</label>
-        <select id="registrarRetiradaSetor">
-          <option value="">Selecione o setor...</option>
-        </select>
+      <div class="liberacao-items-section">
+        <div class="liberacao-items-header">
+          <span>Itens deste PIM</span>
+        </div>
+        <div id="registrarRetiradaItemsList" class="liberacao-items-list"></div>
       </div>
 
-      <div class="filter-group" style="margin-bottom: 1rem;">
-        <label for="registrarRetiradaCategoria">Categoria dos Itens</label>
-        <select id="registrarRetiradaCategoria">
-          <option value="">Selecione a categoria...</option>
-          <option value="Produto de limpeza">Produto de limpeza</option>
-          <option value="Escritório">Escritório</option>
-          <option value="Industrial">Industrial</option>
-          <option value="Prefeitura">Prefeitura</option>
-        </select>
-      </div>
+      <div id="registrarRetiradaFormFields">
+        <div class="filter-group" style="margin-bottom: 1rem; margin-top: 1rem;">
+          <label for="registrarRetiradaSetor">Setor Requisitante</label>
+          <select id="registrarRetiradaSetor">
+            <option value="">Selecione o setor...</option>
+          </select>
+        </div>
 
-      <div class="filter-group">
-        <label for="registrarRetiradaTempo">Tempo da Retirada em minutos (opcional)</label>
-        <input type="number" id="registrarRetiradaTempo" min="0" step="1" placeholder="Ex: 15">
+        <div class="filter-group" style="margin-bottom: 1rem;">
+          <label for="registrarRetiradaCategoria">Categoria dos Itens</label>
+          <select id="registrarRetiradaCategoria">
+            <option value="">Selecione a categoria...</option>
+            <option value="Produto de limpeza">Produto de limpeza</option>
+            <option value="Escritório">Escritório</option>
+            <option value="Industrial">Industrial</option>
+            <option value="Prefeitura">Prefeitura</option>
+          </select>
+        </div>
+
+        <div class="filter-group">
+          <label for="registrarRetiradaTempo">Tempo da Retirada em minutos (opcional)</label>
+          <input type="number" id="registrarRetiradaTempo" min="0" step="1" placeholder="Ex: 15">
+        </div>
       </div>
 
       <p id="registrarRetiradaError" class="modal-error-text hidden"></p>

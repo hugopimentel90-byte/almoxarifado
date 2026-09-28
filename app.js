@@ -3403,14 +3403,21 @@ function createLiberacaoRetiradaStatusCell(card) {
   const td = document.createElement('td');
 
   if (card.registradoNoEstoqueEm) {
-    td.innerHTML = `
-      <span style="display: inline-flex; align-items: center; gap: 0.35rem; color: var(--color-success); font-weight: 700; white-space: nowrap;">
-        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="16" height="16">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-        </svg>
-        Registrado em planilha
-      </span>
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn-link-success';
+    btn.title = 'Ver os itens lançados na aba Registro a partir deste PIM.';
+    btn.innerHTML = `
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+      </svg>
+      Registrado em planilha
     `;
+    btn.addEventListener('click', () => {
+      liberacaoRegistrarRetiradaCardId = card.id;
+      openRegistrarRetiradaLiberacaoModal(card);
+    });
+    td.appendChild(btn);
     return td;
   }
 
@@ -4103,8 +4110,56 @@ function populateRegistrarRetiradaSetorOptions() {
   });
 }
 
+/**
+ * Mostra, em forma de lista (mesmo componente somente-leitura do modal de
+ * detalhe do card — ver createLiberacaoItemRow), os itens (produto/
+ * quantidade) do PIM sendo registrado ou já registrado. Existe pra dar uma
+ * ideia do que foi (ou será) retirado do Estoque antes de confirmar — ou
+ * simplesmente pra consultar depois, num PIM já registrado.
+ */
+function renderRegistrarRetiradaItemsList(itens) {
+  const container = document.getElementById('registrarRetiradaItemsList');
+  container.innerHTML = '';
+
+  const items = Array.isArray(itens) ? itens : [];
+  if (items.length === 0) {
+    container.innerHTML = `<div class="kanban-column-empty">Nenhum item identificado neste PIM</div>`;
+    return;
+  }
+
+  items.forEach((item, index) => {
+    container.appendChild(createLiberacaoItemRow(item, index, false));
+  });
+}
+
+/**
+ * Abre o modal de registro de retirada de um PIM liberado. Funciona em dois
+ * modos, dependendo se o PIM já teve a retirada registrada (card.registradoNoEstoqueEm):
+ *   - Ainda não registrado: mostra o formulário de Setor/Categoria/Tempo,
+ *     junto com a lista de itens que serão lançados (pra dar uma ideia do
+ *     que vai ser retirado do Estoque antes de confirmar).
+ *   - Já registrado: modo somente-leitura — some o formulário, e mostra só a
+ *     lista de itens já lançados e a data do registro. Usado quando se
+ *     clica no badge "Registrado em planilha" na tabela de Histórico, pra
+ *     consultar o que já foi retirado.
+ */
 function openRegistrarRetiradaLiberacaoModal(card) {
+  const isReadOnly = !!card.registradoNoEstoqueEm;
+
   document.getElementById('registrarRetiradaLiberacaoTitulo').textContent = card.titulo;
+  renderRegistrarRetiradaItemsList(card.itens);
+
+  document.getElementById('registrarRetiradaLiberacaoSubtitlePrefix').textContent = isReadOnly
+    ? 'Itens já lançados na aba Registro a partir do PIM'
+    : 'Informe os dados abaixo para lançar os itens do PIM';
+  document.getElementById('registrarRetiradaLiberacaoSubtitleSuffix').textContent = isReadOnly
+    ? `como uma retirada na aba Registro — registrada em ${card.registradoNoEstoqueEm}.`
+    : 'como uma retirada na aba Registro.';
+
+  document.getElementById('registrarRetiradaFormFields').classList.toggle('hidden', isReadOnly);
+  document.getElementById('btnConfirmRegistrarRetiradaLiberacao').classList.toggle('hidden', isReadOnly);
+  document.getElementById('btnCancelRegistrarRetiradaLiberacao').textContent = isReadOnly ? 'Fechar' : 'Cancelar';
+
   populateRegistrarRetiradaSetorOptions();
   document.getElementById('registrarRetiradaSetor').value = '';
   document.getElementById('registrarRetiradaCategoria').value = '';
