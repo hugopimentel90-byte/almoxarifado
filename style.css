@@ -2345,6 +2345,17 @@ tr:hover td { background-color: var(--bg-primary); }
   border: 1px solid var(--border-color);
 }
 
+/* Aqui (diferente de onde .selected-item-name é usada em listas mais
+   apertadas, como os itens selecionados na tela de Retirada) sempre cabe
+   espaço de sobra pro nome — mostra a descrição do produto inteira, sem
+   cortar com reticências, quebrando em mais de uma linha se precisar. */
+.liberacao-item-row .selected-item-name {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  word-break: break-word;
+}
+
 .liberacao-item-row--readonly {
   grid-template-columns: 2fr 1fr;
 }
