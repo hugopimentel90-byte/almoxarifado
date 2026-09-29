@@ -2507,8 +2507,8 @@ function renderEstoqueTable() {
       : formatDataLabelValue(item.total);
     tr.innerHTML = `
       <td style="font-weight: 600; color: var(--text-primary);">${item.produto}</td>
-      <td style="color: var(--text-secondary);">${item.un}</td>
-      <td style="font-weight: 500;">${qtyCellHtml}</td>
+      <td style="color: var(--text-secondary); text-align: center;">${item.un}</td>
+      <td style="font-weight: 500; text-align: center;">${qtyCellHtml}</td>
     `;
     tbody.appendChild(tr);
   });
