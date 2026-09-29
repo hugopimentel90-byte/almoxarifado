@@ -1632,7 +1632,12 @@ tr:hover td { background-color: var(--bg-primary); }
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  z-index: 1100;
+  /* Precisa ficar ACIMA de .modal-overlay (z-index: 1200) — mesmo motivo já
+     documentado em .loading-overlay: showToast() é chamado o tempo todo de
+     dentro de modais abertos (validação de formulário, erros de envio), e
+     com um z-index menor a mensagem renderizava escondida atrás do fundo
+     escurecido do modal, praticamente ilegível. */
+  z-index: 1250;
   transform: translateY(100px);
   opacity: 0;
   transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
