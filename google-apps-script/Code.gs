@@ -55,7 +55,10 @@
  *   A - ID do card
  *   B - Setor
  *   C - Título
- *   D - Descrição
+ *   D - Setor Requisitante (quem vai receber os itens retirados — os mesmos
+ *       setores usados na aba Retirada, ex.: ETA/ETE, Salão CB/MN,
+ *       Prefeitura). Coluna renomeada de "Descrição" — cards criados antes
+ *       dessa mudança podem ter texto livre aqui em vez de um setor.
  *   E - Nome do arquivo anexado
  *   F - URL do arquivo no Google Drive
  *   G - Status atual (Setor | Encarregado | Imediato | Liberados)
@@ -1192,7 +1195,7 @@ function liberacaoRowToCard(row) {
     id: row[0],
     setor: row[1],
     titulo: row[2],
-    descricao: row[3],
+    setorRequisitante: row[3],
     nomeArquivo: row[4],
     urlArquivo: row[5],
     status: row[6],
@@ -1238,10 +1241,11 @@ function handleLiberacaoCriar(ss, payload) {
 
   const setor = (payload.setor || "").trim();
   const titulo = (payload.titulo || "").trim();
-  const descricao = (payload.descricao || "").trim();
+  const setorRequisitante = (payload.setorRequisitante || "").trim();
 
   if (!setor) throw new Error("Informe o setor.");
   if (!titulo) throw new Error("Informe o título do documento.");
+  if (!setorRequisitante) throw new Error("Selecione o setor requisitante.");
 
   let nomeArquivo = "";
   let urlArquivo = "";
@@ -1263,7 +1267,7 @@ function handleLiberacaoCriar(ss, payload) {
   const id = "LIB-" + new Date().getTime();
   const nowStr = formatLiberacaoTimestamp(new Date());
   const itensJSON = JSON.stringify(payload.itens || []);
-  const row = [id, setor, titulo, descricao, nomeArquivo, urlArquivo, "Setor", nowStr, "", "", "", "", itensJSON];
+  const row = [id, setor, titulo, setorRequisitante, nomeArquivo, urlArquivo, "Setor", nowStr, "", "", "", "", itensJSON];
 
   const lock = LockService.getScriptLock();
   lock.waitLock(10000);

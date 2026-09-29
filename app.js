@@ -3557,7 +3557,8 @@ async function handleDeleteLiberacaoCard(id, titulo) {
 function openNewLiberacaoCardModal() {
   document.getElementById('newCardSetor').value = '';
   document.getElementById('newCardTitulo').value = '';
-  document.getElementById('newCardDescricao').value = '';
+  populateSetorRequisitanteOptions(document.getElementById('newCardSetorRequisitante'));
+  document.getElementById('newCardSetorRequisitante').value = '';
   document.getElementById('newCardFile').value = '';
   document.getElementById('newCardError').classList.add('hidden');
   document.getElementById('newLiberacaoCardModal').classList.remove('hidden');
@@ -3692,7 +3693,7 @@ async function extractProductQuantityFromPdf(file) {
 async function handleCreateLiberacaoCard() {
   const setor = document.getElementById('newCardSetor').value;
   const titulo = document.getElementById('newCardTitulo').value.trim();
-  const descricao = document.getElementById('newCardDescricao').value.trim();
+  const setorRequisitante = document.getElementById('newCardSetorRequisitante').value;
   const fileInput = document.getElementById('newCardFile');
   const file = fileInput.files[0];
   const errorEl = document.getElementById('newCardError');
@@ -3704,6 +3705,10 @@ async function handleCreateLiberacaoCard() {
   }
   if (!titulo) {
     showToast("Informe o título do documento.", "error");
+    return;
+  }
+  if (!setorRequisitante) {
+    showToast("Selecione o setor requisitante.", "error");
     return;
   }
   if (!file) {
@@ -3744,7 +3749,7 @@ async function handleCreateLiberacaoCard() {
         tipo: 'liberacao_criar',
         setor: setor,
         titulo: titulo,
-        descricao: descricao,
+        setorRequisitante: setorRequisitante,
         itens: itens,
         arquivo: {
           nome: file.name,
@@ -3780,7 +3785,9 @@ function openLiberacaoCardDetail(id) {
   document.getElementById('liberacaoDetailTitulo').textContent = card.titulo;
   document.getElementById('liberacaoDetailSetor').textContent = card.setor;
   document.getElementById('liberacaoDetailStatus').textContent = card.status;
-  document.getElementById('liberacaoDetailDescricao').textContent = card.descricao || 'Sem descrição.';
+  document.getElementById('liberacaoDetailDescricao').textContent = card.setorRequisitante
+    ? `Setor Requisitante: ${card.setorRequisitante}`
+    : 'Setor Requisitante não informado.';
 
   const fileLink = document.getElementById('liberacaoDetailFileLink');
   const fileNameEl = document.getElementById('liberacaoDetailFileName');
@@ -4093,21 +4100,26 @@ function handleRegistrarRetiradaDeLiberacao() {
 }
 
 /**
- * Preenche o <select> de Setor do modal com os mesmos setores já usados na
- * aba Retirada (extraídos do histórico em rawData) — em vez de uma lista
- * fixa, pra sempre bater com o que já existe na planilha.
+ * Preenche um <select> de Setor Requisitante com os mesmos setores já
+ * usados na aba Retirada (extraídos do histórico em rawData) — em vez de
+ * uma lista fixa, pra sempre bater com o que já existe na planilha.
+ * Compartilhada pelo modal de "Registrar Retirada no Estoque" (Liberação) e
+ * pelo modal de "Novo Documento para Liberação".
  */
-function populateRegistrarRetiradaSetorOptions() {
-  const select = document.getElementById('registrarRetiradaSetor');
-  select.innerHTML = '<option value="">Selecione o setor...</option>';
+function populateSetorRequisitanteOptions(selectEl) {
+  selectEl.innerHTML = '<option value="">Selecione o setor...</option>';
 
   const uniqueSectors = [...new Set(rawData.map(item => item.setor))].filter(Boolean).sort();
   uniqueSectors.forEach(s => {
     const opt = document.createElement('option');
     opt.value = s;
     opt.textContent = s;
-    select.appendChild(opt);
+    selectEl.appendChild(opt);
   });
+}
+
+function populateRegistrarRetiradaSetorOptions() {
+  populateSetorRequisitanteOptions(document.getElementById('registrarRetiradaSetor'));
 }
 
 /**
