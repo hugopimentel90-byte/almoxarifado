@@ -22,6 +22,31 @@ const supabaseClient = (USE_SUPABASE && window.supabase)
   : null;
 
 /**
+ * O PostgREST (API do Supabase) devolve no máximo 1000 linhas por consulta,
+ * por padrão — um .select('*') comum em qualquer tabela com mais de 1000
+ * linhas (ex.: estoque, com quase 2000 produtos, ou registro, com o
+ * histórico completo) vinha cortando o restante SEM erro nenhum, só
+ * devolvendo menos linhas. Esta função busca em páginas de 1000 até a
+ * página vir mais curta que o pedido (sinal de que chegou ao fim).
+ */
+async function supabaseSelectAll(table, columns) {
+  const PAGE_SIZE = 1000;
+  let all = [];
+  let from = 0;
+  for (;;) {
+    const { data, error } = await supabaseClient
+      .from(table)
+      .select(columns || '*')
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) throw new Error(error.message);
+    all = all.concat(data || []);
+    if (!data || data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return all;
+}
+
+/**
  * "dd/MM/yy HH:mm" (mesmo formato do formatLiberacaoTimestamp no Code.gs) a
  * partir de um timestamp ISO do Postgres — pra tudo que já exibe/compara
  * datas de Liberação (parseLiberacaoTimestamp, a tabela de Histórico etc.)
@@ -540,8 +565,7 @@ async function fetchDashboardData() {
       // Lê a tabela registro inteira direto do Supabase — substitui o
       // parsing do CSV publicado (sem cabeçalho pra detectar, sem separador
       // pra adivinhar: os nomes de coluna já vêm certos).
-      const { data, error } = await supabaseClient.from('registro').select('*');
-      if (error) throw new Error(error.message);
+      const data = await supabaseSelectAll('registro');
 
       rawData = (data || [])
         .map(mapRegistroRowToRawItem)
@@ -2990,8 +3014,7 @@ async function fetchDemandaData() {
 
   try {
     if (USE_SUPABASE) {
-      const { data, error } = await supabaseClient.from('demanda').select('*');
-      if (error) throw new Error(error.message);
+      const data = await supabaseSelectAll('demanda');
       demandaData = (data || []).map(mapDemandaRowToItem);
       return;
     }
@@ -3450,8 +3473,7 @@ async function fetchStockLevels() {
   stockLevelsLoadFailed = false;
   try {
     if (USE_SUPABASE) {
-      const { data, error } = await supabaseClient.from('estoque').select('*');
-      if (error) throw new Error(error.message);
+      const data = await supabaseSelectAll('estoque');
       stockData = (data || []).map(mapEstoqueRowToItem);
       return;
     }
@@ -3545,8 +3567,7 @@ async function fetchLiberacaoCards() {
   showLoading(true);
   try {
     if (USE_SUPABASE) {
-      const { data, error } = await supabaseClient.from('liberacao').select('*');
-      if (error) throw new Error(error.message);
+      const data = await supabaseSelectAll('liberacao');
       liberacaoCards = (data || []).map(mapLiberacaoRowToCard);
     } else {
       const response = await fetch(`${SCRIPT_URL}?action=liberacao&t=${new Date().getTime()}`, {
