@@ -353,6 +353,75 @@
     </div>
   </div>
 
+  <!-- Modal de edição direta de um produto do Estoque (lápis na Consulta de Estoque) —
+       só aparece com o Supabase ativado (ver podeEditarEstoque em app.js), já que
+       enquanto o site usa a planilha a edição continua sendo feita direto no Sheets. -->
+  <div id="editarEstoqueItemModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h2 class="modal-title">Editar Produto</h2>
+      <p class="modal-subtitle">
+        Altera o produto diretamente no Estoque — não passa pela Retirada nem pela Entrada. Use com cuidado.
+      </p>
+
+      <div class="filter-group" style="margin-bottom: 1rem; margin-top: 1rem;">
+        <label for="editarEstoqueProduto">Nome do Produto</label>
+        <input type="text" id="editarEstoqueProduto" placeholder="Nome do produto">
+      </div>
+
+      <div class="filter-group" style="margin-bottom: 1rem;">
+        <label for="editarEstoqueUnidade">Unidade</label>
+        <input type="text" id="editarEstoqueUnidade" placeholder="Ex: un, cx, L">
+      </div>
+
+      <div class="filter-group" style="margin-bottom: 1rem;">
+        <label for="editarEstoqueQuantidade">Quantidade em Estoque</label>
+        <input type="number" id="editarEstoqueQuantidade" min="0" step="1">
+      </div>
+
+      <div class="filter-group">
+        <label for="editarEstoqueSenha">Senha da Diretoria</label>
+        <input type="password" id="editarEstoqueSenha" placeholder="Digite a senha...">
+      </div>
+
+      <p id="editarEstoqueError" class="modal-error-text hidden"></p>
+
+      <div class="form-actions" style="margin-top: 1.5rem;">
+        <button id="btnCancelEditarEstoque" class="btn btn-secondary">Cancelar</button>
+        <button id="btnConfirmEditarEstoque" class="btn btn-submit">Salvar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de edição do Ponto de Pedido (lápis na aba Ponto de Pedido) — grava
+       direto na aba Demanda, casando pelo nome do produto (ver
+       demanda_editar_ponto_pedido em 003_funcoes.sql e callDemandaEditarPontoPedido
+       em app.js). Ponto de Pedido não é mais um campo do Estoque. -->
+  <div id="editarPontoPedidoModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h2 class="modal-title">Editar Ponto de Pedido</h2>
+      <p class="modal-subtitle">
+        <strong id="editarPontoPedidoProdutoNome"></strong>
+      </p>
+
+      <div class="filter-group" style="margin-bottom: 1rem; margin-top: 1rem;">
+        <label for="editarPontoPedidoValor">Ponto de Pedido</label>
+        <input type="number" id="editarPontoPedidoValor" min="0" step="1" placeholder="Deixe em branco para remover">
+      </div>
+
+      <div class="filter-group">
+        <label for="editarPontoPedidoSenha">Senha da Diretoria</label>
+        <input type="password" id="editarPontoPedidoSenha" placeholder="Digite a senha...">
+      </div>
+
+      <p id="editarPontoPedidoError" class="modal-error-text hidden"></p>
+
+      <div class="form-actions" style="margin-top: 1.5rem;">
+        <button id="btnCancelEditarPontoPedido" class="btn btn-secondary">Cancelar</button>
+        <button id="btnConfirmEditarPontoPedido" class="btn btn-submit">Salvar</button>
+      </div>
+    </div>
+  </div>
+
   <div class="app-layout">
     
     <!-- Menu Lateral (Sidebar) -->
@@ -963,6 +1032,7 @@
                     <th>Produto</th>
                     <th style="text-align: center;">Unidade</th>
                     <th id="estoqueQuantityHeader" style="text-align: center;">Quantidade em Estoque</th>
+                    <th id="estoqueActionsHeader" style="text-align: center;" class="hidden">Ações</th>
                   </tr>
                 </thead>
                 <tbody id="estoqueTableBody">
@@ -1095,6 +1165,7 @@
                   <th>Quantidade em Estoque</th>
                   <th>Ponto de Pedido</th>
                   <th>Status</th>
+                  <th id="pontoPedidoActionsHeader" style="text-align: center;" class="hidden">Ações</th>
                 </tr>
               </thead>
               <tbody id="pontoPedidoTableBody">

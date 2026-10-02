@@ -2183,6 +2183,32 @@ tr:hover td { background-color: var(--bg-primary); }
   height: 15px;
 }
 
+/* Lápis de edição direta de produto na Consulta de Estoque (só aparece com
+   o Supabase ativado — ver podeEditarEstoque em app.js). */
+.estoque-edit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: var(--transition);
+}
+
+.estoque-edit-btn:hover {
+  color: var(--color-primary);
+  background-color: var(--color-primary-light);
+}
+
+.estoque-edit-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
 /* Botão "Registrar retirada" na coluna de status da tabela de Histórico de
    Liberação — mesma cor de aviso usada no card do Kanban, mas clicável, já
    que aqui é a única forma de registrar um PIM que já saiu do quadro. */

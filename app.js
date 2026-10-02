@@ -96,14 +96,19 @@ function isoDateStrToLocalDate(isoStr) {
   return isNaN(date.getTime()) ? null : date;
 }
 
-/** Linha da tabela `estoque` do Supabase -> mesmo formato que o Code.gs sempre devolveu. */
+/**
+ * Linha da tabela `estoque` do Supabase -> mesmo formato que o Code.gs
+ * sempre devolveu. Não lê ponto_pedido: esse valor não é mais um conceito do
+ * Estoque — mora só na aba Demanda (ver aplicarPontoPedidoDaDemanda), que é
+ * quem preenche item.pontoPedido quando existir.
+ */
 function mapEstoqueRowToItem(row) {
   return {
+    id: row.id,
     produto: row.produto,
     un: row.un || '',
     categoria: row.categoria || '',
     codigoBarras: row.codigo_barras || '',
-    pontoPedido: Number(row.ponto_pedido) || 0,
     total: Number(row.saldo) || 0
   };
 }
@@ -230,6 +235,49 @@ async function callRetirarMaterial(items) {
     body: JSON.stringify({ tipo: 'retirada', items })
   });
   return await response.json();
+}
+
+/**
+ * Edição direta de um produto do Estoque (nome, unidade, quantidade e Ponto
+ * de Pedido) — só existe no Supabase (ver estoque_editar em 003_funcoes.sql).
+ * Enquanto USE_SUPABASE for false, a planilha do Google Sheets continua
+ * sendo a única forma de editar essas células, como sempre foi; por isso
+ * esta função não tem um caminho pelo SCRIPT_URL.
+ */
+async function callEstoqueEditar({ id, produto, un, saldo, senha }) {
+  if (!USE_SUPABASE) {
+    return { status: 'error', message: 'Edição de estoque só está disponível com o Supabase ativado.' };
+  }
+  return rpcResultParaRespostaLegada(
+    await supabaseClient.rpc('estoque_editar', {
+      p_id: id,
+      p_produto: produto,
+      p_un: un,
+      p_saldo: saldo,
+      p_senha: senha
+    }),
+    data => ({ item: mapEstoqueRowToItem(data) })
+  );
+}
+
+/**
+ * Cria/atualiza só o Ponto de Pedido de um material na Demanda (casando pelo
+ * nome) — única fonte de Ponto de Pedido do sistema (ver
+ * demanda_editar_ponto_pedido em 003_funcoes.sql). Também só existe no
+ * Supabase, como callEstoqueEditar.
+ */
+async function callDemandaEditarPontoPedido({ material, pontoPedido, senha }) {
+  if (!USE_SUPABASE) {
+    return { status: 'error', message: 'Edição do Ponto de Pedido só está disponível com o Supabase ativado.' };
+  }
+  return rpcResultParaRespostaLegada(
+    await supabaseClient.rpc('demanda_editar_ponto_pedido', {
+      p_material: material,
+      p_ponto_pedido: (pontoPedido !== undefined && pontoPedido !== null && pontoPedido !== '') ? pontoPedido : null,
+      p_senha: senha
+    }),
+    data => ({ item: mapDemandaRowToItem(data) })
+  );
 }
 
 async function callRegistrarEntrada(items) {
@@ -2789,6 +2837,14 @@ function initializeEstoqueModule() {
     estoqueSearchQuery = e.target.value;
     renderEstoqueTable();
   });
+
+  document.getElementById('btnCancelEditarEstoque').addEventListener('click', closeEditarEstoqueItemModal);
+  document.getElementById('btnConfirmEditarEstoque').addEventListener('click', handleConfirmEditarEstoqueItem);
+  document.getElementById('editarEstoqueItemModal').addEventListener('click', (e) => {
+    if (e.target.id === 'editarEstoqueItemModal') {
+      closeEditarEstoqueItemModal();
+    }
+  });
 }
 
 function showEstoqueScreen(screen) {
@@ -2839,9 +2895,23 @@ function getCategoryForProduct(productName) {
   return match ? match.categoria : '';
 }
 
+/**
+ * A edição direta de produto (lápis na Consulta de Estoque) só existe com o
+ * Supabase ligado (ver callEstoqueEditar) — enquanto USE_SUPABASE for false,
+ * a planilha continua sendo a única forma de editar, como sempre foi. Também
+ * fica fora do alcance do perfil visitante, que já nem vê a quantidade real.
+ */
+function podeEditarEstoque() {
+  return USE_SUPABASE && currentUserRole !== 'visitante';
+}
+
 function renderEstoqueTable() {
   const tbody = document.getElementById('estoqueTableBody');
+  const actionsHeader = document.getElementById('estoqueActionsHeader');
   tbody.innerHTML = '';
+
+  const canEdit = podeEditarEstoque();
+  if (actionsHeader) actionsHeader.classList.toggle('hidden', !canEdit);
 
   let items = stockData.filter(item =>
     getCategoryForProduct(item.produto).toLowerCase() === currentEstoqueCategory.toLowerCase()
@@ -2858,7 +2928,8 @@ function renderEstoqueTable() {
     const message = stockLevelsLoadFailed
       ? 'Não foi possível carregar os dados do estoque. Verifique sua conexão e tente novamente.'
       : 'Nenhum produto encontrado nesta categoria';
-    tbody.innerHTML = `<tr><td colspan="3" style="text-align: center; color: ${stockLevelsLoadFailed ? 'var(--color-danger)' : 'var(--text-secondary)'}; padding: 2rem;">${message}</td></tr>`;
+    const colspan = canEdit ? 4 : 3;
+    tbody.innerHTML = `<tr><td colspan="${colspan}" style="text-align: center; color: ${stockLevelsLoadFailed ? 'var(--color-danger)' : 'var(--text-secondary)'}; padding: 2rem;">${message}</td></tr>`;
     return;
   }
 
@@ -2873,9 +2944,95 @@ function renderEstoqueTable() {
       <td style="font-weight: 600; color: var(--text-primary);">${item.produto}</td>
       <td style="color: var(--text-secondary); text-align: center;">${item.un}</td>
       <td style="font-weight: 500; text-align: center;">${qtyCellHtml}</td>
+      ${canEdit ? `
+      <td style="text-align: center;">
+        <button type="button" class="estoque-edit-btn" title="Editar produto" aria-label="Editar produto">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 20h9"></path>
+            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+          </svg>
+        </button>
+      </td>` : ''}
     `;
+    if (canEdit) {
+      tr.querySelector('.estoque-edit-btn').addEventListener('click', () => openEditarEstoqueItemModal(item));
+    }
     tbody.appendChild(tr);
   });
+}
+
+let editarEstoqueItemAtual = null;
+
+function openEditarEstoqueItemModal(item) {
+  editarEstoqueItemAtual = item;
+  document.getElementById('editarEstoqueProduto').value = item.produto;
+  document.getElementById('editarEstoqueUnidade').value = item.un || '';
+  document.getElementById('editarEstoqueQuantidade').value = item.total;
+  document.getElementById('editarEstoqueSenha').value = '';
+  document.getElementById('editarEstoqueError').classList.add('hidden');
+  document.getElementById('editarEstoqueItemModal').classList.remove('hidden');
+}
+
+function closeEditarEstoqueItemModal() {
+  document.getElementById('editarEstoqueItemModal').classList.add('hidden');
+  editarEstoqueItemAtual = null;
+}
+
+async function handleConfirmEditarEstoqueItem() {
+  if (!editarEstoqueItemAtual) return;
+
+  const errorEl = document.getElementById('editarEstoqueError');
+  errorEl.classList.add('hidden');
+
+  const produto = document.getElementById('editarEstoqueProduto').value.trim();
+  const un = document.getElementById('editarEstoqueUnidade').value.trim();
+  const quantidadeStr = document.getElementById('editarEstoqueQuantidade').value;
+  const senha = document.getElementById('editarEstoqueSenha').value;
+
+  if (!produto) {
+    errorEl.textContent = 'Informe o nome do produto.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  if (quantidadeStr === '' || Number(quantidadeStr) < 0) {
+    errorEl.textContent = 'Informe uma quantidade válida (zero ou mais).';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  if (!senha) {
+    errorEl.textContent = 'Informe a senha da Diretoria.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  const confirmBtn = document.getElementById('btnConfirmEditarEstoque');
+  setButtonProcessing(confirmBtn, 'Salvando...');
+
+  try {
+    const resData = await callEstoqueEditar({
+      id: editarEstoqueItemAtual.id,
+      produto,
+      un,
+      saldo: Number(quantidadeStr),
+      senha
+    });
+
+    if (resData && resData.status === 'success') {
+      showToast("Produto atualizado!", "success");
+      closeEditarEstoqueItemModal();
+      await fetchStockLevels();
+      renderEstoqueTable();
+    } else {
+      throw new Error(resData.message || "Erro ao atualizar o produto.");
+    }
+  } catch (error) {
+    console.error("Erro ao editar produto do estoque:", error);
+    errorEl.textContent = error.message || "Erro ao atualizar o produto. Tente novamente.";
+    errorEl.classList.remove('hidden');
+    document.getElementById('editarEstoqueSenha').value = '';
+  } finally {
+    clearButtonProcessing(confirmBtn);
+  }
 }
 
 // --- MÓDULO DE PONTO DE PEDIDO (ACESSO RESTRITO AO PERFIL ADMINISTRADOR) ---
@@ -2894,6 +3051,14 @@ function initializePontoPedidoModule() {
   });
   document.getElementById('btnBaixarPedidoObtencaoPDF').addEventListener('click', handleBaixarPedidoObtencaoPDF);
   document.getElementById('btnEnviarPedidoObtencaoEmail').addEventListener('click', handleEnviarPedidoObtencaoEmail);
+
+  document.getElementById('btnCancelEditarPontoPedido').addEventListener('click', closeEditarPontoPedidoModal);
+  document.getElementById('btnConfirmEditarPontoPedido').addEventListener('click', handleConfirmEditarPontoPedido);
+  document.getElementById('editarPontoPedidoModal').addEventListener('click', (e) => {
+    if (e.target.id === 'editarPontoPedidoModal') {
+      closeEditarPontoPedidoModal();
+    }
+  });
 }
 
 /**
@@ -2953,10 +3118,14 @@ function renderPontoPedidoTable() {
   const tbody = document.getElementById('pontoPedidoTableBody');
   const categoriaEl = document.getElementById('pontoPedidoCategoryFilter');
   const categoria = categoriaEl ? categoriaEl.value : '';
+  const actionsHeader = document.getElementById('pontoPedidoActionsHeader');
   tbody.innerHTML = '';
 
+  const canEdit = podeEditarEstoque();
+  if (actionsHeader) actionsHeader.classList.toggle('hidden', !canEdit);
+
   if (!categoria) {
-    tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Selecione uma categoria para consultar</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="${canEdit ? 5 : 4}" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Selecione uma categoria para consultar</td></tr>`;
     return;
   }
 
@@ -2969,7 +3138,7 @@ function renderPontoPedidoTable() {
     const message = stockLevelsLoadFailed
       ? 'Não foi possível carregar os dados do estoque. Verifique sua conexão e tente novamente.'
       : 'Nenhum produto encontrado nesta categoria';
-    tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: ${stockLevelsLoadFailed ? 'var(--color-danger)' : 'var(--text-secondary)'}; padding: 2rem;">${message}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="${canEdit ? 5 : 4}" style="text-align: center; color: ${stockLevelsLoadFailed ? 'var(--color-danger)' : 'var(--text-secondary)'}; padding: 2rem;">${message}</td></tr>`;
     return;
   }
 
@@ -2993,9 +3162,84 @@ function renderPontoPedidoTable() {
       <td style="font-weight: 500;">${formatDataLabelValue(item.total)}</td>
       <td style="color: var(--text-secondary);">${item.pontoPedido ? formatDataLabelValue(item.pontoPedido) : '—'}</td>
       <td>${statusHtml}</td>
+      ${canEdit ? `
+      <td style="text-align: center;">
+        <button type="button" class="estoque-edit-btn" title="Editar Ponto de Pedido" aria-label="Editar Ponto de Pedido">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 20h9"></path>
+            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+          </svg>
+        </button>
+      </td>` : ''}
     `;
+    if (canEdit) {
+      tr.querySelector('.estoque-edit-btn').addEventListener('click', () => openEditarPontoPedidoModal(item));
+    }
     tbody.appendChild(tr);
   });
+}
+
+let editarPontoPedidoItemAtual = null;
+
+function openEditarPontoPedidoModal(item) {
+  editarPontoPedidoItemAtual = item;
+  document.getElementById('editarPontoPedidoProdutoNome').textContent = item.produto;
+  document.getElementById('editarPontoPedidoValor').value = item.pontoPedido || '';
+  document.getElementById('editarPontoPedidoSenha').value = '';
+  document.getElementById('editarPontoPedidoError').classList.add('hidden');
+  document.getElementById('editarPontoPedidoModal').classList.remove('hidden');
+}
+
+function closeEditarPontoPedidoModal() {
+  document.getElementById('editarPontoPedidoModal').classList.add('hidden');
+  editarPontoPedidoItemAtual = null;
+}
+
+async function handleConfirmEditarPontoPedido() {
+  if (!editarPontoPedidoItemAtual) return;
+
+  const errorEl = document.getElementById('editarPontoPedidoError');
+  errorEl.classList.add('hidden');
+
+  const valorStr = document.getElementById('editarPontoPedidoValor').value;
+  const senha = document.getElementById('editarPontoPedidoSenha').value;
+
+  if (valorStr !== '' && Number(valorStr) < 0) {
+    errorEl.textContent = 'O Ponto de Pedido não pode ser negativo.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  if (!senha) {
+    errorEl.textContent = 'Informe a senha da Diretoria.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  const confirmBtn = document.getElementById('btnConfirmEditarPontoPedido');
+  setButtonProcessing(confirmBtn, 'Salvando...');
+
+  try {
+    const resData = await callDemandaEditarPontoPedido({
+      material: editarPontoPedidoItemAtual.produto,
+      pontoPedido: valorStr === '' ? null : Number(valorStr),
+      senha
+    });
+
+    if (resData && resData.status === 'success') {
+      showToast("Ponto de Pedido atualizado!", "success");
+      closeEditarPontoPedidoModal();
+      await carregarPontoPedidoDados();
+    } else {
+      throw new Error(resData.message || "Erro ao atualizar o Ponto de Pedido.");
+    }
+  } catch (error) {
+    console.error("Erro ao editar Ponto de Pedido:", error);
+    errorEl.textContent = error.message || "Erro ao atualizar o Ponto de Pedido. Tente novamente.";
+    errorEl.classList.remove('hidden');
+    document.getElementById('editarPontoPedidoSenha').value = '';
+  } finally {
+    clearButtonProcessing(confirmBtn);
+  }
 }
 
 // --- PEDIDO DE OBTENÇÃO (produtos que atingiram o Ponto de Pedido) ---

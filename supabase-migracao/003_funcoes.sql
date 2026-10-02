@@ -414,8 +414,112 @@ end;
 $$;
 
 -- =====================================================================
+-- estoque_editar: edição direta de um produto do Estoque (nome, unidade e
+-- quantidade — NÃO mexe em Ponto de Pedido, que mora só na aba Demanda, ver
+-- demanda_editar_ponto_pedido abaixo) — criada pra Fase 2 porque, uma vez em
+-- produção no Supabase, não dá mais pra abrir a planilha e editar a célula
+-- na mão. Diferente de retirar_material/registrar_entrada, esta função
+-- GRAVA o saldo diretamente (não soma/subtrai) — por isso exige a mesma
+-- senha da Diretoria usada em liberacao_registrar_retirada, e não deixa
+-- renomear um produto para um nome que já existe em outra linha (mesma
+-- regra do índice único por nome, só que com uma mensagem amigável em vez
+-- de estourar a constraint).
+-- =====================================================================
+drop function if exists estoque_editar(bigint, text, text, numeric, numeric, text);
+
+create or replace function estoque_editar(
+  p_id bigint,
+  p_produto text,
+  p_un text,
+  p_saldo numeric,
+  p_senha text
+) returns estoque
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_diretoria_senha constant text := 'diretoria321';
+  v_produto text := trim(coalesce(p_produto, ''));
+  v_row estoque;
+begin
+  if p_senha is distinct from v_diretoria_senha then
+    raise exception 'Senha da Diretoria incorreta.';
+  end if;
+  if v_produto = '' then
+    raise exception 'Informe o nome do produto.';
+  end if;
+  if p_saldo is null or p_saldo < 0 then
+    raise exception 'A quantidade em estoque não pode ser negativa.';
+  end if;
+
+  select * into v_row from estoque where id = p_id for update;
+  if not found then
+    raise exception 'Produto não encontrado.';
+  end if;
+
+  if exists (select 1 from estoque where lower(produto) = lower(v_produto) and id <> p_id) then
+    raise exception 'Já existe outro produto chamado "%".', v_produto;
+  end if;
+
+  update estoque
+    set produto = v_produto,
+        un = nullif(trim(coalesce(p_un, '')), ''),
+        saldo = p_saldo,
+        updated_at = now()
+    where id = p_id
+    returning * into v_row;
+
+  return v_row;
+end;
+$$;
+
+-- =====================================================================
+-- demanda_editar_ponto_pedido: cria ou atualiza só o Ponto de Pedido de um
+-- material na aba Demanda, casando pelo nome (mesmo critério que
+-- aplicarPontoPedidoDaDemanda já usa no app.js pra sobrepor esse valor em
+-- cima do Estoque). É a ÚNICA fonte de Ponto de Pedido do sistema — a aba
+-- Estoque não tem mais esse conceito. Se o material ainda não tiver uma
+-- linha na Demanda, cria uma só com o nome e o Ponto de Pedido (os outros
+-- campos de fornecedor ficam em branco até serem preenchidos à parte).
+-- =====================================================================
+create or replace function demanda_editar_ponto_pedido(
+  p_material text,
+  p_ponto_pedido numeric,
+  p_senha text
+) returns demanda
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_diretoria_senha constant text := 'diretoria321';
+  v_material text := trim(coalesce(p_material, ''));
+  v_row demanda;
+begin
+  if p_senha is distinct from v_diretoria_senha then
+    raise exception 'Senha da Diretoria incorreta.';
+  end if;
+  if v_material = '' then
+    raise exception 'Produto não informado.';
+  end if;
+  if p_ponto_pedido is not null and p_ponto_pedido < 0 then
+    raise exception 'O Ponto de Pedido não pode ser negativo.';
+  end if;
+
+  insert into demanda (material, ponto_pedido)
+  values (v_material, p_ponto_pedido)
+  on conflict (lower(material)) do update
+    set ponto_pedido = excluded.ponto_pedido
+  returning * into v_row;
+
+  return v_row;
+end;
+$$;
+
+-- =====================================================================
 -- Permissões: as 4 tabelas só aceitam leitura via RLS (002_rls.sql); toda
--- escrita passa obrigatoriamente por uma destas 7 funções.
+-- escrita passa obrigatoriamente por uma destas funções.
 -- =====================================================================
 grant execute on function retirar_material(jsonb) to anon, authenticated;
 grant execute on function registrar_entrada(jsonb) to anon, authenticated;
@@ -424,3 +528,5 @@ grant execute on function liberacao_avancar(text, text, jsonb) to anon, authenti
 grant execute on function liberacao_recusar(text) to anon, authenticated;
 grant execute on function liberacao_excluir(text) to anon, authenticated;
 grant execute on function liberacao_registrar_retirada(text, text, text, text, numeric) to anon, authenticated;
+grant execute on function estoque_editar(bigint, text, text, numeric, text) to anon, authenticated;
+grant execute on function demanda_editar_ponto_pedido(text, numeric, text) to anon, authenticated;
