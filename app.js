@@ -4,6 +4,353 @@ const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTwMkf7LbwKuzdd
 // URL do Web App do Google Apps Script para salvar retiradas diretamente na planilha
 const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw2kh2TjukkucopLdLQTINnFdYrUGEns2UonGz8tt7g4KkxakUt0TBXYXQBeML59G39/exec";
 
+// --- MIGRAÇÃO SUPABASE (FASE 2) ---
+//
+// Enquanto USE_SUPABASE for false, o app continua 100% no Google
+// Sheets/Apps Script, exatamente como sempre — nada muda pra quem usa o
+// site hoje. Quando virar true, os dados passam a vir/ir do Supabase (ver
+// supabase-migracao/001_schema.sql, 002_rls.sql, 003_funcoes.sql); só o
+// upload/exclusão do PDF da Liberação e o envio de e-mail do Pedido de
+// Obtenção continuam passando pelo SCRIPT_URL (o Postgres não fala com
+// Google Drive nem envia e-mail). Essa é a chave que "corta" pra produção
+// de verdade, só depois de validar em paralelo.
+const USE_SUPABASE = false;
+const SUPABASE_URL = "https://hrcafrtvajsinttvcjgh.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhyY2FmcnR2YWpzaW50dHZjamdoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkyMTg3MTEsImV4cCI6MjEwNDc5NDcxMX0.JqdmjdkZou3KApwzhKq3VSYIC2b3W3xe0Pzs2vyDgI8";
+const supabaseClient = (USE_SUPABASE && window.supabase)
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  : null;
+
+/**
+ * "dd/MM/yy HH:mm" (mesmo formato do formatLiberacaoTimestamp no Code.gs) a
+ * partir de um timestamp ISO do Postgres — pra tudo que já exibe/compara
+ * datas de Liberação (parseLiberacaoTimestamp, a tabela de Histórico etc.)
+ * continuar funcionando sem precisar saber de onde o dado veio.
+ */
+function formatSupabaseTimestampBR(isoStr) {
+  if (!isoStr) return '';
+  const d = new Date(isoStr);
+  if (isNaN(d.getTime())) return '';
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${String(d.getFullYear()).slice(-2)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** "dd/MM/yy" a partir de uma data (string "YYYY-MM-DD" do Postgres ou Date). */
+function formatSupabaseDateBR(value) {
+  if (!value) return '';
+  const d = value instanceof Date ? value : isoDateStrToLocalDate(value);
+  if (!d) return '';
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${String(d.getFullYear()).slice(-2)}`;
+}
+
+/** "YYYY-MM-DD" (data local, sem componente de hora) a partir de um objeto Date. */
+function dateToISODateStr(date) {
+  if (!(date instanceof Date) || isNaN(date.getTime())) return null;
+  const pad = n => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/** "YYYY-MM-DD" a partir de uma string "dd/MM/yy" ou "dd/MM/yyyy". */
+function brDateStrToISODateStr(str) {
+  if (!str) return null;
+  const parts = String(str).trim().split('/');
+  if (parts.length !== 3) return null;
+  let [d, m, y] = parts;
+  if (y.length === 2) y = '20' + y;
+  return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+}
+
+/** Date local (meia-noite) a partir de uma string "YYYY-MM-DD" do Postgres. */
+function isoDateStrToLocalDate(isoStr) {
+  if (!isoStr) return null;
+  const parts = String(isoStr).split('-').map(Number);
+  if (parts.length !== 3 || parts.some(n => Number.isNaN(n))) return null;
+  const [y, m, d] = parts;
+  const date = new Date(y, m - 1, d);
+  return isNaN(date.getTime()) ? null : date;
+}
+
+/** Linha da tabela `estoque` do Supabase -> mesmo formato que o Code.gs sempre devolveu. */
+function mapEstoqueRowToItem(row) {
+  return {
+    produto: row.produto,
+    un: row.un || '',
+    categoria: row.categoria || '',
+    codigoBarras: row.codigo_barras || '',
+    pontoPedido: Number(row.ponto_pedido) || 0,
+    total: Number(row.saldo) || 0
+  };
+}
+
+/** Linha da tabela `demanda` do Supabase -> mesmo formato que o Code.gs sempre devolveu. */
+function mapDemandaRowToItem(row) {
+  return {
+    material: row.material,
+    pontoPedido: Number(row.ponto_pedido) || 0,
+    unidade: row.unidade || '',
+    categoria: row.categoria || '',
+    descricaoFornecedor: row.descricao_fornecedor || '',
+    qtdMinima: Number(row.qtd_minima) || 0,
+    multiplicador: Number(row.multiplicador) || 0,
+    valorUnitario: Number(row.valor_unitario) || 0
+  };
+}
+
+/** Linha da tabela `liberacao` do Supabase -> mesmo formato que liberacaoRowToCard no Code.gs sempre devolveu. */
+function mapLiberacaoRowToCard(row) {
+  return {
+    id: row.id,
+    setor: row.setor,
+    titulo: row.titulo,
+    setorRequisitante: row.setor_requisitante,
+    nomeArquivo: row.nome_arquivo,
+    urlArquivo: row.url_arquivo,
+    status: row.status,
+    criadoEm: formatSupabaseTimestampBR(row.criado_em),
+    transmitidoEm: formatSupabaseTimestampBR(row.transmitido_em),
+    aprovadoEncarregadoEm: formatSupabaseTimestampBR(row.aprovado_encarregado_em),
+    aprovadoImediatoEm: formatSupabaseTimestampBR(row.aprovado_imediato_em),
+    ultimaAcao: row.ultima_acao,
+    itens: Array.isArray(row.itens) ? row.itens : [],
+    registradoNoEstoqueEm: formatSupabaseTimestampBR(row.registrado_no_estoque_em)
+  };
+}
+
+/** Linha da tabela `registro` do Supabase -> mesmo formato que fetchDashboardData sempre montou a partir do CSV. */
+function mapRegistroRowToRawItem(row) {
+  const dateObj = isoDateStrToLocalDate(row.data);
+  const pagoEmDateObj = isoDateStrToLocalDate(row.pago_em);
+  return {
+    produto: row.produto,
+    qtd: Number(row.qtd) || 0,
+    un: row.un || '',
+    data: dateObj,
+    dataStr: formatSupabaseDateBR(dateObj),
+    filterDate: pagoEmDateObj || dateObj,
+    setor: row.setor || 'Não Especificado',
+    pedido: row.pedido || 'Sem Pedido',
+    observacao: row.observacao || '',
+    pagoEm: formatSupabaseDateBR(pagoEmDateObj),
+    mes: Number(row.mes) || (dateObj ? dateObj.getMonth() + 1 : 0),
+    categoria: row.categoria || 'Outros',
+    precoMedio: Number(row.preco_medio) || 0,
+    tempoRetiradaMinutos: Number(row.tempo_retirada_min) || 0
+  };
+}
+
+/**
+ * Normaliza um item de retirada/entrada (como já são montados em
+ * submitWithdrawalForm/submitEntradaForm) pro formato jsonb que
+ * retirar_material/registrar_entrada esperam — mesmos nomes de campo do
+ * Code.gs, só convertendo datas pra "YYYY-MM-DD" (o Postgres não entende
+ * "dd/MM/yy" de forma confiável).
+ */
+function mapItemParaRpc(item) {
+  return {
+    produto: item.produto || '',
+    qtd: item.qtd != null ? item.qtd : 0,
+    un: item.un || '',
+    data: item.data instanceof Date ? dateToISODateStr(item.data) : brDateStrToISODateStr(item.dataStr || item.data),
+    setor: item.setor || '',
+    pedido: item.pedido || '',
+    pagoEm: brDateStrToISODateStr(item.pagoEm),
+    mes: item.mes || '',
+    categoria: item.categoria || '',
+    tempoRetiradaMinutos: (item.tempoRetiradaMinutos !== undefined && item.tempoRetiradaMinutos !== null && item.tempoRetiradaMinutos !== '')
+      ? item.tempoRetiradaMinutos
+      : ''
+  };
+}
+
+/**
+ * Traduz o resultado de uma chamada supabase.rpc() pro MESMO formato de
+ * resposta que o Apps Script sempre devolveu ({status, message, type,
+ * details}) — assim o código que já trata essa resposta (em cada tela) não
+ * precisa saber se veio do Supabase ou do Code.gs.
+ */
+function rpcResultParaRespostaLegada(result, extra) {
+  const { data, error } = result;
+  if (error) {
+    const resp = { status: 'error', message: error.message };
+    if (error.message === 'Quantidade solicitada excede o estoque disponível.' && error.details) {
+      try {
+        resp.type = 'estoque_insuficiente';
+        resp.details = JSON.parse(error.details);
+      } catch (e) { /* mantém sem details se não for o JSON esperado */ }
+    }
+    return resp;
+  }
+  return Object.assign({ status: 'success' }, extra ? extra(data) : null, { data });
+}
+
+/**
+ * Um "call*" por operação de escrita/leitura estruturada — cada um decide
+ * sozinho se fala com o Supabase ou com o Apps Script (USE_SUPABASE), mas
+ * sempre devolve a MESMA forma de resposta que o Code.gs sempre devolveu
+ * ({status, message, type?, details?, card?}). Assim, o código de cada tela
+ * (validação de formulário, mensagens de erro, toasts) não muda nada —
+ * só troca de onde o dado vem.
+ */
+async function callRetirarMaterial(items) {
+  if (USE_SUPABASE) {
+    return rpcResultParaRespostaLegada(
+      await supabaseClient.rpc('retirar_material', { items: items.map(mapItemParaRpc) })
+    );
+  }
+  const response = await fetch(SCRIPT_URL, {
+    method: 'POST',
+    mode: 'cors',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ tipo: 'retirada', items })
+  });
+  return await response.json();
+}
+
+async function callRegistrarEntrada(items) {
+  if (USE_SUPABASE) {
+    return rpcResultParaRespostaLegada(
+      await supabaseClient.rpc('registrar_entrada', { items })
+    );
+  }
+  const response = await fetch(SCRIPT_URL, {
+    method: 'POST',
+    mode: 'cors',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ tipo: 'entrada', items })
+  });
+  return await response.json();
+}
+
+/** Upload do PDF no Drive — sempre via Apps Script, mesmo com USE_SUPABASE=true (Postgres não fala com o Drive). */
+async function callLiberacaoUploadArquivo(arquivo) {
+  const response = await fetch(SCRIPT_URL, {
+    method: 'POST',
+    mode: 'cors',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ tipo: 'liberacao_upload_arquivo', arquivo })
+  });
+  return await response.json();
+}
+
+/** Exclusão do PDF no Drive — mesmo motivo do upload acima. */
+async function callLiberacaoTrashArquivo(urlArquivo) {
+  if (!urlArquivo) return { status: 'success' };
+  const response = await fetch(SCRIPT_URL, {
+    method: 'POST',
+    mode: 'cors',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ tipo: 'liberacao_trash_arquivo', urlArquivo })
+  });
+  return await response.json();
+}
+
+async function callLiberacaoCriar({ setor, titulo, setorRequisitante, itens, arquivo }) {
+  if (USE_SUPABASE) {
+    const uploadData = await callLiberacaoUploadArquivo(arquivo);
+    if (!uploadData || uploadData.status !== 'success') {
+      return { status: 'error', message: (uploadData && uploadData.message) || 'Erro ao enviar o documento para o Drive.' };
+    }
+    return rpcResultParaRespostaLegada(
+      await supabaseClient.rpc('liberacao_criar', {
+        p_setor: setor,
+        p_titulo: titulo,
+        p_setor_requisitante: setorRequisitante,
+        p_nome_arquivo: uploadData.nomeArquivo,
+        p_url_arquivo: uploadData.urlArquivo,
+        p_itens: itens
+      }),
+      data => ({ card: mapLiberacaoRowToCard(data) })
+    );
+  }
+  const response = await fetch(SCRIPT_URL, {
+    method: 'POST',
+    mode: 'cors',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ tipo: 'liberacao_criar', setor, titulo, setorRequisitante, itens, arquivo })
+  });
+  return await response.json();
+}
+
+async function callLiberacaoAvancar({ id, senha, itens }) {
+  if (USE_SUPABASE) {
+    return rpcResultParaRespostaLegada(
+      await supabaseClient.rpc('liberacao_avancar', { p_id: id, p_senha: senha || null, p_itens: itens || null }),
+      data => ({ card: mapLiberacaoRowToCard(data) })
+    );
+  }
+  const response = await fetch(SCRIPT_URL, {
+    method: 'POST',
+    mode: 'cors',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ tipo: 'liberacao_avancar', id, senha, itens })
+  });
+  return await response.json();
+}
+
+async function callLiberacaoRecusar({ id }) {
+  if (USE_SUPABASE) {
+    return rpcResultParaRespostaLegada(
+      await supabaseClient.rpc('liberacao_recusar', { p_id: id }),
+      data => ({ card: mapLiberacaoRowToCard(data) })
+    );
+  }
+  const response = await fetch(SCRIPT_URL, {
+    method: 'POST',
+    mode: 'cors',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ tipo: 'liberacao_recusar', id })
+  });
+  return await response.json();
+}
+
+async function callLiberacaoExcluir({ id }) {
+  if (USE_SUPABASE) {
+    const resp = rpcResultParaRespostaLegada(await supabaseClient.rpc('liberacao_excluir', { p_id: id }));
+    if (resp.status === 'success') {
+      // O Postgres não sabe nada sobre o Drive — a exclusão do arquivo
+      // acontece à parte, depois que a linha já saiu do banco.
+      await callLiberacaoTrashArquivo(resp.data && resp.data.url_arquivo);
+    }
+    return resp;
+  }
+  const response = await fetch(SCRIPT_URL, {
+    method: 'POST',
+    mode: 'cors',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ tipo: 'liberacao_excluir', id })
+  });
+  return await response.json();
+}
+
+/**
+ * Único caso onde a resposta "de sucesso" pode trazer um aviso que precisa
+ * virar mensagem de erro na tela (ver comentário grande em
+ * liberacao_registrar_retirada, no 003_funcoes.sql, sobre por que a função
+ * devolve {registrado, aviso} em vez de lançar exceção nesses casos).
+ */
+async function callLiberacaoRegistrarRetirada({ id, setor, categoria, tempoRetiradaMinutos, senha }) {
+  if (USE_SUPABASE) {
+    const { data, error } = await supabaseClient.rpc('liberacao_registrar_retirada', {
+      p_id: id,
+      p_senha: senha,
+      p_setor: setor,
+      p_categoria: categoria,
+      p_tempo: (tempoRetiradaMinutos !== undefined && tempoRetiradaMinutos !== '') ? tempoRetiradaMinutos : null
+    });
+    if (error) return { status: 'error', message: error.message };
+    if (data && data.registrado === false) return { status: 'error', message: data.aviso };
+    return { status: 'success', aviso: data ? data.aviso : null };
+  }
+  const response = await fetch(SCRIPT_URL, {
+    method: 'POST',
+    mode: 'cors',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ tipo: 'liberacao_registrar_retirada', id, setor, categoria, tempoRetiradaMinutos, senha })
+  });
+  return await response.json();
+}
+
 // Chave para armazenamento de retiradas locais
 const LOCAL_STORAGE_KEY = "almoxarifado_retiradas_locais";
 
@@ -189,82 +536,94 @@ async function fetchDashboardData() {
   hideError();
 
   try {
-    const cacheBuster = `&t=${new Date().getTime()}`;
-    const response = await fetch(`${CSV_URL}${cacheBuster}`, {
-      cache: "no-store",
-      headers: {
-        'pragma': 'no-cache',
-        'cache-control': 'no-cache'
-      }
-    });
+    if (USE_SUPABASE) {
+      // Lê a tabela registro inteira direto do Supabase — substitui o
+      // parsing do CSV publicado (sem cabeçalho pra detectar, sem separador
+      // pra adivinhar: os nomes de coluna já vêm certos).
+      const { data, error } = await supabaseClient.from('registro').select('*');
+      if (error) throw new Error(error.message);
 
-    if (!response.ok) {
-      throw new Error(`Falha na requisição HTTP: ${response.status} ${response.statusText}`);
-    }
-
-    const csvText = await response.text();
-    const lines = csvText.split(/\r?\n/);
-
-    if (lines.length < 2) {
-      throw new Error("O arquivo CSV está vazio ou não possui registros válidos.");
-    }
-
-    const separator = detectSeparator(lines[0]);
-    const headers = parseCSVLine(lines[0], separator);
-
-    const headerIndexes = {};
-    headers.forEach((header, index) => {
-      const norm = normalizeHeader(header);
-      headerIndexes[norm] = index;
-    });
-
-    const missingHeaders = REQUIRED_HEADERS.filter(h => headerIndexes[h] === undefined);
-    if (missingHeaders.length > 0) {
-      throw new Error(`Colunas obrigatórias ausentes na planilha: ${missingHeaders.join(', ')}`);
-    }
-
-    rawData = [];
-    for (let i = 1; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line) continue;
-
-      const cells = parseCSVLine(line, separator);
-      const produtoVal = cells[headerIndexes['produto']];
-      const dataVal = cells[headerIndexes['data']];
-      const qtdVal = cells[headerIndexes['qtd']];
-
-      if (!produtoVal || !dataVal || !qtdVal) continue;
-
-      const dateObj = parseDate(dataVal);
-      if (!dateObj) continue;
-
-      const qtdNum = parseNumber(qtdVal);
-      if (qtdNum <= 0) continue;
-
-      const pagoEmVal = cells[headerIndexes['pagoem']] || '';
-      const pagoEmDateObj = parseDate(pagoEmVal);
-
-      rawData.push({
-        produto: produtoVal,
-        qtd: qtdNum,
-        un: cells[headerIndexes['un']] || '',
-        data: dateObj,
-        dataStr: dataVal,
-        // Data usada pelos filtros/KPIs/gráficos do Dashboard: prioriza "Pago em"
-        // (quando o pedido foi de fato processado) e cai para "Data" só quando
-        // ainda não há "Pago em" preenchido (pedido pendente).
-        filterDate: pagoEmDateObj || dateObj,
-        setor: cells[headerIndexes['setor']] || 'Não Especificado',
-        pedido: cells[headerIndexes['pedido']] || 'Sem Pedido',
-        observacao: cells[headerIndexes['observacao']] || '',
-        pagoEm: pagoEmVal,
-        mes: parseInt(cells[headerIndexes['mes']], 10) || (dateObj.getMonth() + 1),
-        categoria: cells[headerIndexes['categoria']] || 'Outros',
-        precoMedio: parseNumber(cells[headerIndexes['precomedio']]),
-        // Coluna L ("Tempo"): minutos gastos na retirada, preenchido só na
-        // primeira linha de cada lote de itens de um mesmo pedido.
-        tempoRetiradaMinutos: headerIndexes['tempo'] !== undefined ? parseNumber(cells[headerIndexes['tempo']]) : 0
+      rawData = (data || [])
+        .map(mapRegistroRowToRawItem)
+        .filter(item => item.produto && item.data && item.qtd > 0);
+    } else {
+      const cacheBuster = `&t=${new Date().getTime()}`;
+      const response = await fetch(`${CSV_URL}${cacheBuster}`, {
+        cache: "no-store",
+        headers: {
+          'pragma': 'no-cache',
+          'cache-control': 'no-cache'
+        }
       });
+
+      if (!response.ok) {
+        throw new Error(`Falha na requisição HTTP: ${response.status} ${response.statusText}`);
+      }
+
+      const csvText = await response.text();
+      const lines = csvText.split(/\r?\n/);
+
+      if (lines.length < 2) {
+        throw new Error("O arquivo CSV está vazio ou não possui registros válidos.");
+      }
+
+      const separator = detectSeparator(lines[0]);
+      const headers = parseCSVLine(lines[0], separator);
+
+      const headerIndexes = {};
+      headers.forEach((header, index) => {
+        const norm = normalizeHeader(header);
+        headerIndexes[norm] = index;
+      });
+
+      const missingHeaders = REQUIRED_HEADERS.filter(h => headerIndexes[h] === undefined);
+      if (missingHeaders.length > 0) {
+        throw new Error(`Colunas obrigatórias ausentes na planilha: ${missingHeaders.join(', ')}`);
+      }
+
+      rawData = [];
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+
+        const cells = parseCSVLine(line, separator);
+        const produtoVal = cells[headerIndexes['produto']];
+        const dataVal = cells[headerIndexes['data']];
+        const qtdVal = cells[headerIndexes['qtd']];
+
+        if (!produtoVal || !dataVal || !qtdVal) continue;
+
+        const dateObj = parseDate(dataVal);
+        if (!dateObj) continue;
+
+        const qtdNum = parseNumber(qtdVal);
+        if (qtdNum <= 0) continue;
+
+        const pagoEmVal = cells[headerIndexes['pagoem']] || '';
+        const pagoEmDateObj = parseDate(pagoEmVal);
+
+        rawData.push({
+          produto: produtoVal,
+          qtd: qtdNum,
+          un: cells[headerIndexes['un']] || '',
+          data: dateObj,
+          dataStr: dataVal,
+          // Data usada pelos filtros/KPIs/gráficos do Dashboard: prioriza "Pago em"
+          // (quando o pedido foi de fato processado) e cai para "Data" só quando
+          // ainda não há "Pago em" preenchido (pedido pendente).
+          filterDate: pagoEmDateObj || dateObj,
+          setor: cells[headerIndexes['setor']] || 'Não Especificado',
+          pedido: cells[headerIndexes['pedido']] || 'Sem Pedido',
+          observacao: cells[headerIndexes['observacao']] || '',
+          pagoEm: pagoEmVal,
+          mes: parseInt(cells[headerIndexes['mes']], 10) || (dateObj.getMonth() + 1),
+          categoria: cells[headerIndexes['categoria']] || 'Outros',
+          precoMedio: parseNumber(cells[headerIndexes['precomedio']]),
+          // Coluna L ("Tempo"): minutos gastos na retirada, preenchido só na
+          // primeira linha de cada lote de itens de um mesmo pedido.
+          tempoRetiradaMinutos: headerIndexes['tempo'] !== undefined ? parseNumber(cells[headerIndexes['tempo']]) : 0
+        });
+      }
     }
 
     // --- SINCRO: Mescla dados do LocalStorage ---
@@ -1734,22 +2093,12 @@ async function submitWithdrawalForm(pagoEmStr) {
     });
   });
 
-  // Se SCRIPT_URL estiver configurada, tenta enviar para o Google Sheets
-  if (SCRIPT_URL && SCRIPT_URL.trim() !== "") {
+  // Se SCRIPT_URL estiver configurada (ou já estamos no Supabase), tenta enviar
+  if (USE_SUPABASE || (SCRIPT_URL && SCRIPT_URL.trim() !== "")) {
     showLoading(true);
     let insufficientStock = false;
     try {
-      // Envia os dados como JSON para o Google Apps Script Web App
-      const response = await fetch(SCRIPT_URL, {
-        method: 'POST',
-        mode: 'cors',
-        headers: {
-          'Content-Type': 'text/plain', // Evita requisição preflight complexa em alguns navegadores/servidores
-        },
-        body: JSON.stringify({ tipo: 'retirada', items: newWithdrawals })
-      });
-
-      const resData = await response.json();
+      const resData = await callRetirarMaterial(newWithdrawals);
       if (resData && resData.status === 'success') {
         // Salva no LocalStorage como cache local temporário até o CSV atualizar
         saveLocalWithdrawal(newWithdrawals);
@@ -2365,23 +2714,14 @@ async function submitEntradaForm() {
     });
   });
 
-  if (!SCRIPT_URL || SCRIPT_URL.trim() === "") {
+  if (!USE_SUPABASE && (!SCRIPT_URL || SCRIPT_URL.trim() === "")) {
     showToast("Configure a SCRIPT_URL para enviar a entrada à planilha.", "warning");
     return;
   }
 
   showLoading(true);
   try {
-    const response = await fetch(SCRIPT_URL, {
-      method: 'POST',
-      mode: 'cors',
-      headers: {
-        'Content-Type': 'text/plain',
-      },
-      body: JSON.stringify({ tipo: 'entrada', items: newEntries })
-    });
-
-    const resData = await response.json();
+    const resData = await callRegistrarEntrada(newEntries);
     if (resData && resData.status === 'success') {
       showToast(`${newEntries.length} itens registrados com sucesso no estoque!`, "success");
     } else {
@@ -2643,12 +2983,19 @@ function renderPontoPedidoTable() {
  * "sem dados de fornecedor", sem travar o resto da funcionalidade.
  */
 async function fetchDemandaData() {
-  if (!SCRIPT_URL || SCRIPT_URL.trim() === "") {
+  if (!USE_SUPABASE && (!SCRIPT_URL || SCRIPT_URL.trim() === "")) {
     demandaData = [];
     return;
   }
 
   try {
+    if (USE_SUPABASE) {
+      const { data, error } = await supabaseClient.from('demanda').select('*');
+      if (error) throw new Error(error.message);
+      demandaData = (data || []).map(mapDemandaRowToItem);
+      return;
+    }
+
     const response = await fetch(`${SCRIPT_URL}?action=demanda&t=${new Date().getTime()}`, {
       method: 'GET',
       cache: 'no-store'
@@ -3094,7 +3441,7 @@ async function handleEnviarPedidoObtencaoEmail() {
 }
 
 async function fetchStockLevels() {
-  if (!SCRIPT_URL || SCRIPT_URL.trim() === "") {
+  if (!USE_SUPABASE && (!SCRIPT_URL || SCRIPT_URL.trim() === "")) {
     showToast("Configure a SCRIPT_URL para consultar o estoque.", "warning");
     return;
   }
@@ -3102,6 +3449,13 @@ async function fetchStockLevels() {
   showLoading(true);
   stockLevelsLoadFailed = false;
   try {
+    if (USE_SUPABASE) {
+      const { data, error } = await supabaseClient.from('estoque').select('*');
+      if (error) throw new Error(error.message);
+      stockData = (data || []).map(mapEstoqueRowToItem);
+      return;
+    }
+
     const response = await fetch(`${SCRIPT_URL}?action=estoque&t=${new Date().getTime()}`, {
       method: 'GET',
       cache: 'no-store'
@@ -3183,27 +3537,33 @@ function initializeLiberacaoModule() {
 }
 
 async function fetchLiberacaoCards() {
-  if (!SCRIPT_URL || SCRIPT_URL.trim() === "") {
+  if (!USE_SUPABASE && (!SCRIPT_URL || SCRIPT_URL.trim() === "")) {
     showToast("Configure a SCRIPT_URL para consultar a esteira de liberação.", "warning");
     return;
   }
 
   showLoading(true);
   try {
-    const response = await fetch(`${SCRIPT_URL}?action=liberacao&t=${new Date().getTime()}`, {
-      method: 'GET',
-      cache: 'no-store'
-    });
-
-    if (!response.ok) {
-      throw new Error(`Falha na requisição HTTP: ${response.status} ${response.statusText}`);
-    }
-
-    const resData = await response.json();
-    if (resData && resData.status === 'success' && Array.isArray(resData.cards)) {
-      liberacaoCards = resData.cards;
+    if (USE_SUPABASE) {
+      const { data, error } = await supabaseClient.from('liberacao').select('*');
+      if (error) throw new Error(error.message);
+      liberacaoCards = (data || []).map(mapLiberacaoRowToCard);
     } else {
-      throw new Error(resData.message || "Erro desconhecido ao consultar a esteira de liberação.");
+      const response = await fetch(`${SCRIPT_URL}?action=liberacao&t=${new Date().getTime()}`, {
+        method: 'GET',
+        cache: 'no-store'
+      });
+
+      if (!response.ok) {
+        throw new Error(`Falha na requisição HTTP: ${response.status} ${response.statusText}`);
+      }
+
+      const resData = await response.json();
+      if (resData && resData.status === 'success' && Array.isArray(resData.cards)) {
+        liberacaoCards = resData.cards;
+      } else {
+        throw new Error(resData.message || "Erro desconhecido ao consultar a esteira de liberação.");
+      }
     }
   } catch (error) {
     console.error("Erro ao consultar esteira de liberação:", error);
@@ -3523,23 +3883,14 @@ async function handleDeleteLiberacaoCard(id, titulo) {
   const confirmed = window.confirm(`Excluir o documento "${titulo}"? Essa ação não pode ser desfeita.`);
   if (!confirmed) return;
 
-  if (!SCRIPT_URL || SCRIPT_URL.trim() === "") {
+  if (!USE_SUPABASE && (!SCRIPT_URL || SCRIPT_URL.trim() === "")) {
     showToast("Configure a SCRIPT_URL para excluir o documento.", "warning");
     return;
   }
 
   showLoading(true);
   try {
-    const response = await fetch(SCRIPT_URL, {
-      method: 'POST',
-      mode: 'cors',
-      headers: {
-        'Content-Type': 'text/plain',
-      },
-      body: JSON.stringify({ tipo: 'liberacao_excluir', id: id })
-    });
-
-    const resData = await response.json();
+    const resData = await callLiberacaoExcluir({ id });
     if (resData && resData.status === 'success') {
       showToast("Documento excluído.", "success");
       await fetchLiberacaoCards();
@@ -3723,7 +4074,7 @@ async function handleCreateLiberacaoCard() {
     return;
   }
 
-  if (!SCRIPT_URL || SCRIPT_URL.trim() === "") {
+  if (!USE_SUPABASE && (!SCRIPT_URL || SCRIPT_URL.trim() === "")) {
     showToast("Configure a SCRIPT_URL para enviar o documento.", "warning");
     return;
   }
@@ -3739,27 +4090,17 @@ async function handleCreateLiberacaoCard() {
       isPdf ? extractProductQuantityFromPdf(file) : Promise.resolve([])
     ]);
 
-    const response = await fetch(SCRIPT_URL, {
-      method: 'POST',
-      mode: 'cors',
-      headers: {
-        'Content-Type': 'text/plain',
-      },
-      body: JSON.stringify({
-        tipo: 'liberacao_criar',
-        setor: setor,
-        titulo: titulo,
-        setorRequisitante: setorRequisitante,
-        itens: itens,
-        arquivo: {
-          nome: file.name,
-          mimeType: file.type || 'application/octet-stream',
-          base64: base64
-        }
-      })
+    const resData = await callLiberacaoCriar({
+      setor,
+      titulo,
+      setorRequisitante,
+      itens,
+      arquivo: {
+        nome: file.name,
+        mimeType: file.type || 'application/octet-stream',
+        base64: base64
+      }
     });
-
-    const resData = await response.json();
     if (resData && resData.status === 'success') {
       showToast("Documento enviado para o setor!", "success");
       closeNewLiberacaoCardModal();
@@ -4056,16 +4397,7 @@ async function handleLiberacaoAdvance() {
   rejectBtn.disabled = true;
 
   try {
-    const response = await fetch(SCRIPT_URL, {
-      method: 'POST',
-      mode: 'cors',
-      headers: {
-        'Content-Type': 'text/plain',
-      },
-      body: JSON.stringify({ tipo: 'liberacao_avancar', id: card.id, senha: senha, itens: currentLiberacaoItems })
-    });
-
-    const resData = await response.json();
+    const resData = await callLiberacaoAvancar({ id: card.id, senha, itens: currentLiberacaoItems });
     if (resData && resData.status === 'success') {
       showToast("Documento avançou para a próxima etapa!", "success");
       closeLiberacaoCardDetail();
@@ -4227,25 +4559,15 @@ async function handleConfirmRegistrarRetiradaLiberacao() {
   setButtonProcessing(confirmBtn, 'Registrando...');
 
   try {
-    const response = await fetch(SCRIPT_URL, {
-      method: 'POST',
-      mode: 'cors',
-      headers: {
-        'Content-Type': 'text/plain',
-      },
-      body: JSON.stringify({
-        tipo: 'liberacao_registrar_retirada',
-        id: card.id,
-        setor: setor,
-        categoria: categoria,
-        tempoRetiradaMinutos: tempoStr === '' ? '' : (parseInt(tempoStr, 10) || 0),
-        senha: senha
-      })
+    const resData = await callLiberacaoRegistrarRetirada({
+      id: card.id,
+      setor,
+      categoria,
+      tempoRetiradaMinutos: tempoStr === '' ? '' : (parseInt(tempoStr, 10) || 0),
+      senha
     });
-
-    const resData = await response.json();
     if (resData && resData.status === 'success') {
-      showToast("Retirada registrada na aba Registro!", "success");
+      showToast(resData.aviso ? `Retirada registrada, mas: ${resData.aviso}` : "Retirada registrada na aba Registro!", resData.aviso ? "warning" : "success");
       closeRegistrarRetiradaLiberacaoModal();
       await fetchLiberacaoCards();
     } else {
@@ -4271,16 +4593,7 @@ async function handleLiberacaoReject() {
   advanceBtn.disabled = true;
 
   try {
-    const response = await fetch(SCRIPT_URL, {
-      method: 'POST',
-      mode: 'cors',
-      headers: {
-        'Content-Type': 'text/plain',
-      },
-      body: JSON.stringify({ tipo: 'liberacao_recusar', id: card.id })
-    });
-
-    const resData = await response.json();
+    const resData = await callLiberacaoRecusar({ id: card.id });
     if (resData && resData.status === 'success') {
       showToast("Documento recusado e devolvido para a etapa anterior.", "warning");
       closeLiberacaoCardDetail();

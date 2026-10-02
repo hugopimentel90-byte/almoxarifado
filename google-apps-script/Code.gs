@@ -547,6 +547,10 @@ function doPost(e) {
       response = { card: handleLiberacaoAvancar(ss, payload) };
     } else if (tipo === "liberacao_recusar") {
       response = { card: handleLiberacaoRecusar(ss, payload) };
+    } else if (tipo === "liberacao_upload_arquivo") {
+      response = handleLiberacaoUploadArquivo(payload);
+    } else if (tipo === "liberacao_trash_arquivo") {
+      response = { trashed: handleLiberacaoTrashArquivo(payload) };
     } else if (tipo === "liberacao_excluir") {
       response = { deleted: handleLiberacaoExcluir(ss, payload) };
     } else if (tipo === "liberacao_registrar_retirada") {
@@ -1220,6 +1224,52 @@ function parseLiberacaoItens(value) {
   } catch (e) {
     return [];
   }
+}
+
+/**
+ * Faz só o upload do PDF no Drive (Fase 2 da migração Supabase: o Postgres
+ * não fala com a API do Drive, então o app.js chama este endpoint separado
+ * ANTES de criar o card via RPC no Supabase, e manda nome/URL prontos pra
+ * função liberacao_criar). Mesma lógica de upload de handleLiberacaoCriar.
+ */
+function handleLiberacaoUploadArquivo(payload) {
+  const arquivo = payload.arquivo;
+  if (!arquivo || !arquivo.base64) throw new Error("Nenhum arquivo informado.");
+
+  const folder = getOrCreateLiberacaoFolder();
+  const bytes = Utilities.base64Decode(arquivo.base64);
+  const blob = Utilities.newBlob(
+    bytes,
+    arquivo.mimeType || "application/octet-stream",
+    arquivo.nome || "documento"
+  );
+  const file = folder.createFile(blob);
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+  return {
+    nomeArquivo: arquivo.nome || file.getName(),
+    urlArquivo: file.getUrl()
+  };
+}
+
+/**
+ * Move pra lixeira o arquivo do Drive de um card já excluído no Supabase
+ * (Fase 2: o Postgres devolve a urlArquivo da linha apagada, e o app.js
+ * chama este endpoint à parte pra limpar o Drive).
+ */
+function handleLiberacaoTrashArquivo(payload) {
+  const urlArquivo = payload.urlArquivo;
+  if (!urlArquivo) return true;
+
+  try {
+    const fileId = getDriveFileIdFromUrl(urlArquivo);
+    if (fileId) {
+      DriveApp.getFileById(fileId).setTrashed(true);
+    }
+  } catch (e) {
+    // Se não conseguir apagar o arquivo do Drive, não é um erro fatal pro app.
+  }
+  return true;
 }
 
 /**
