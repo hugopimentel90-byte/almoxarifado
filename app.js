@@ -143,8 +143,42 @@ function mapLiberacaoRowToCard(row) {
     aprovadoImediatoEm: formatSupabaseTimestampBR(row.aprovado_imediato_em),
     ultimaAcao: row.ultima_acao,
     itens: Array.isArray(row.itens) ? row.itens : [],
+    itensOriginais: Array.isArray(row.itens_originais) ? row.itens_originais : [],
     registradoNoEstoqueEm: formatSupabaseTimestampBR(row.registrado_no_estoque_em)
   };
+}
+
+/**
+ * Compara os itens atuais do PIM com os itens originais (extraídos do PDF na
+ * criação, nunca mais sobrescritos — ver itens_originais em
+ * 003_funcoes.sql/liberacao_criar) pra saber se o Encarregado alterou alguma
+ * quantidade, adicionou ou removeu um item antes de aprovar. Cards sem
+ * itensOriginais gravado (criados antes dessa coluna existir) não têm como
+ * saber se houve alteração — não marca nesse caso.
+ */
+function pimTeveQuantidadeAlterada(card) {
+  const originais = Array.isArray(card.itensOriginais) ? card.itensOriginais : [];
+  const atuais = Array.isArray(card.itens) ? card.itens : [];
+  if (originais.length === 0) return false;
+
+  const normalizar = (lista) => lista
+    .map(i => `${String((i && i.produto) || '').trim().toLowerCase()}::${Number(i && i.qtd) || 0}`)
+    .sort();
+  const a = normalizar(originais);
+  const b = normalizar(atuais);
+  return a.length !== b.length || a.some((v, idx) => v !== b[idx]);
+}
+
+/** Selo de aviso "quantidades alteradas" usado no card do Kanban e no Histórico. */
+function pimAlteradoBadgeHtml() {
+  return `
+    <span class="pim-alterado-badge" title="As quantidades deste PIM foram alteradas em relação ao pedido original enviado">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 20h9"></path>
+        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+      </svg>
+    </span>
+  `;
 }
 
 /** Linha da tabela `registro` do Supabase -> mesmo formato que fetchDashboardData sempre montou a partir do CSV. */
@@ -3952,6 +3986,12 @@ function renderLiberacaoHistorico() {
       pimCell.textContent = card.titulo;
       pimCell.title = 'Sem documento anexado';
     }
+    if (pimTeveQuantidadeAlterada(card)) {
+      pimCell.style.display = 'flex';
+      pimCell.style.alignItems = 'center';
+      pimCell.style.gap = '0.4rem';
+      pimCell.insertAdjacentHTML('beforeend', pimAlteradoBadgeHtml());
+    }
     tr.appendChild(pimCell);
 
     const setorCell = document.createElement('td');
@@ -4098,16 +4138,21 @@ function createLiberacaoCardElement(card) {
 
   const canDelete = card.status === 'Setor';
 
+  const alterado = pimTeveQuantidadeAlterada(card);
+
   el.innerHTML = `
     <div class="kanban-card-top-row">
       <span class="kanban-card-sector">${card.setor}</span>
-      ${canDelete ? `
-        <button type="button" class="kanban-card-delete" title="Excluir documento">
-          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
-          </svg>
-        </button>
-      ` : ''}
+      <div class="kanban-card-top-row-actions">
+        ${alterado ? pimAlteradoBadgeHtml() : ''}
+        ${canDelete ? `
+          <button type="button" class="kanban-card-delete" title="Excluir documento">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+            </svg>
+          </button>
+        ` : ''}
+      </div>
     </div>
     <div class="kanban-card-title" title="${card.titulo}">${card.titulo}</div>
     <div class="kanban-card-meta">

@@ -2146,6 +2146,13 @@ tr:hover td { background-color: var(--bg-primary); }
   margin-bottom: 0.5rem;
 }
 
+.kanban-card-top-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
 .kanban-card-sector {
   display: inline-block;
   font-size: 0.6875rem;
@@ -2207,6 +2214,27 @@ tr:hover td { background-color: var(--bg-primary); }
 .estoque-edit-btn svg {
   width: 16px;
   height: 16px;
+}
+
+/* Selo "quantidades alteradas" no card do Kanban de Liberação e na linha do
+   PIM no Histórico — avisa que o Encarregado mudou algum quantitativo em
+   relação ao pedido original (ver pimTeveQuantidadeAlterada em app.js). */
+.pim-alterado-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background-color: var(--color-warning-light);
+  color: var(--color-warning);
+  cursor: help;
+}
+
+.pim-alterado-badge svg {
+  width: 11px;
+  height: 11px;
 }
 
 /* Botão "Registrar retirada" na coluna de status da tabela de Histórico de

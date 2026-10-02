@@ -161,8 +161,12 @@ begin
 
   v_id := 'LIB-' || floor(extract(epoch from clock_timestamp()) * 1000)::bigint::text;
 
-  insert into liberacao (id, setor, titulo, setor_requisitante, nome_arquivo, url_arquivo, status, criado_em, itens)
-  values (v_id, trim(p_setor), trim(p_titulo), trim(p_setor_requisitante), p_nome_arquivo, p_url_arquivo, 'Setor', now(), coalesce(p_itens, '[]'::jsonb))
+  -- itens_originais grava o que veio do PDF na criação e nunca mais é
+  -- sobrescrito — é o que permite comparar depois se o Encarregado alterou
+  -- alguma quantidade antes de aprovar (ver pimTeveQuantidadeAlterada no
+  -- app.js, usado pro aviso no card do Kanban e no Histórico).
+  insert into liberacao (id, setor, titulo, setor_requisitante, nome_arquivo, url_arquivo, status, criado_em, itens, itens_originais)
+  values (v_id, trim(p_setor), trim(p_titulo), trim(p_setor_requisitante), p_nome_arquivo, p_url_arquivo, 'Setor', now(), coalesce(p_itens, '[]'::jsonb), coalesce(p_itens, '[]'::jsonb))
   returning * into v_row;
 
   return v_row;

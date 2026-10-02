@@ -54,6 +54,10 @@ create table if not exists liberacao (
   aprovado_imediato_em timestamptz,
   ultima_acao text,
   itens jsonb not null default '[]'::jsonb,
+  -- Itens exatamente como vieram do PDF na criação, nunca mais sobrescritos —
+  -- permite detectar se o Encarregado alterou alguma quantidade antes de
+  -- aprovar (coluna adicionada depois da Fase 2, ver 003_funcoes.sql).
+  itens_originais jsonb not null default '[]'::jsonb,
   registrado_no_estoque_em timestamptz
 );
 create index if not exists liberacao_status_idx on liberacao (status);
