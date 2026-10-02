@@ -14,7 +14,7 @@ const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw2kh2TjukkucopLdLQT
 // Obtenção continuam passando pelo SCRIPT_URL (o Postgres não fala com
 // Google Drive nem envia e-mail). Essa é a chave que "corta" pra produção
 // de verdade, só depois de validar em paralelo.
-const USE_SUPABASE = false;
+const USE_SUPABASE = true;
 const SUPABASE_URL = "https://hrcafrtvajsinttvcjgh.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhyY2FmcnR2YWpzaW50dHZjamdoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkyMTg3MTEsImV4cCI6MjEwNDc5NDcxMX0.JqdmjdkZou3KApwzhKq3VSYIC2b3W3xe0Pzs2vyDgI8";
 const supabaseClient = (USE_SUPABASE && window.supabase)
