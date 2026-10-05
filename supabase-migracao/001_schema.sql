@@ -14,6 +14,11 @@ create table if not exists estoque (
   -- A separação base/entrada só existia por causa do limite de largura da
   -- planilha — no Postgres isso deixa de fazer sentido.
   saldo numeric not null default 0,
+  -- Se o item está coberto por alguma ATA de Registro de Preços vigente.
+  -- null = ainda não informado. Editável pelo lápis da Consulta de Estoque
+  -- e usado como filtro na tela Ponto de Compra (coluna adicionada depois
+  -- da Fase 2, ver estoque_editar em 003_funcoes.sql).
+  ata boolean,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

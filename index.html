@@ -378,6 +378,15 @@
         <input type="number" id="editarEstoqueQuantidade" min="0" step="1">
       </div>
 
+      <div class="filter-group" style="margin-bottom: 1rem;">
+        <label for="editarEstoqueAta">Está em ATA de Registro de Preços?</label>
+        <select id="editarEstoqueAta">
+          <option value="">Não informado</option>
+          <option value="true">Sim</option>
+          <option value="false">Não</option>
+        </select>
+      </div>
+
       <div class="filter-group">
         <label for="editarEstoqueSenha">Senha da Diretoria</label>
         <input type="password" id="editarEstoqueSenha" placeholder="Digite a senha...">
@@ -484,11 +493,11 @@
           </a>
         </li>
         <li class="menu-item">
-          <a id="menuPontoPedido" class="menu-link" title="Ponto de Pedido">
+          <a id="menuPontoPedido" class="menu-link" title="Ponto de Compra">
             <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
             </svg>
-            <span class="menu-link-text">Ponto de Pedido</span>
+            <span class="menu-link-text">Ponto de Compra</span>
           </a>
         </li>
       </nav>
@@ -1032,6 +1041,7 @@
                     <th>Produto</th>
                     <th style="text-align: center;">Unidade</th>
                     <th id="estoqueQuantityHeader" style="text-align: center;">Quantidade em Estoque</th>
+                    <th style="text-align: center;">ATA</th>
                     <th id="estoqueActionsHeader" style="text-align: center;" class="hidden">Ações</th>
                   </tr>
                 </thead>
@@ -1131,8 +1141,8 @@
       <main id="viewPontoPedido" class="view-content container hidden">
         <header style="margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
           <div class="header-title-container">
-            <h1>Ponto de Pedido</h1>
-            <p>Acompanhe quais produtos estão perto (ou já na hora) de precisar de um novo pedido de compra</p>
+            <h1>Ponto de Compra</h1>
+            <p>Filtre os materiais por categoria, Ponto de Pedido e ATA de Registro de Preços para montar um pedido</p>
           </div>
           <button id="btnAbrirPedidoObtencao" class="btn-refresh">
             <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
@@ -1145,15 +1155,34 @@
         <section class="table-card">
           <div class="table-header">
             <div class="table-title">Produtos por Categoria</div>
-            <div class="filter-group filter-group--wide">
-              <label for="pontoPedidoCategoryFilter">Categoria</label>
-              <select id="pontoPedidoCategoryFilter">
-                <option value="">Selecione uma categoria...</option>
-                <option value="Produto de limpeza">Produto de limpeza</option>
-                <option value="Escritório">Escritório</option>
-                <option value="Industrial">Industrial</option>
-                <option value="Prefeitura">Prefeitura</option>
-              </select>
+            <div class="table-header-actions">
+              <div class="filter-group filter-group--wide">
+                <label for="pontoPedidoCategoryFilter">Categoria</label>
+                <select id="pontoPedidoCategoryFilter">
+                  <option value="">Selecione uma categoria...</option>
+                  <option value="Produto de limpeza">Produto de limpeza</option>
+                  <option value="Escritório">Escritório</option>
+                  <option value="Industrial">Industrial</option>
+                  <option value="Prefeitura">Prefeitura</option>
+                </select>
+              </div>
+              <div class="filter-group">
+                <label for="pontoPedidoPontoPedidoFilter">Ponto de Pedido</label>
+                <select id="pontoPedidoPontoPedidoFilter">
+                  <option value="todos">Todos</option>
+                  <option value="sim">Sim</option>
+                  <option value="nao">Não</option>
+                </select>
+              </div>
+              <div class="filter-group">
+                <label for="pontoPedidoAtaFilter">ATA</label>
+                <select id="pontoPedidoAtaFilter">
+                  <option value="">Selecione...</option>
+                  <option value="sim">Sim</option>
+                  <option value="nao">Não</option>
+                </select>
+              </div>
+              <button id="btnGerarPontoCompra" class="btn btn-submit" disabled>Gerar</button>
             </div>
           </div>
 
@@ -1164,12 +1193,13 @@
                   <th>Produto</th>
                   <th>Quantidade em Estoque</th>
                   <th>Ponto de Pedido</th>
+                  <th>ATA</th>
                   <th>Status</th>
                   <th id="pontoPedidoActionsHeader" style="text-align: center;" class="hidden">Ações</th>
                 </tr>
               </thead>
               <tbody id="pontoPedidoTableBody">
-                <tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Selecione uma categoria para consultar</td></tr>
+                <tr><td colspan="5" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Selecione ao menos a Categoria e a ATA para consultar</td></tr>
               </tbody>
             </table>
           </div>

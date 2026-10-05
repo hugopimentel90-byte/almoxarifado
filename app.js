@@ -109,6 +109,8 @@ function mapEstoqueRowToItem(row) {
     un: row.un || '',
     categoria: row.categoria || '',
     codigoBarras: row.codigo_barras || '',
+    // true | false | null (null = ainda não informado)
+    ata: row.ata === true || row.ata === false ? row.ata : null,
     total: Number(row.saldo) || 0
   };
 }
@@ -278,7 +280,7 @@ async function callRetirarMaterial(items) {
  * sendo a única forma de editar essas células, como sempre foi; por isso
  * esta função não tem um caminho pelo SCRIPT_URL.
  */
-async function callEstoqueEditar({ id, produto, un, saldo, senha }) {
+async function callEstoqueEditar({ id, produto, un, saldo, ata, senha }) {
   if (!USE_SUPABASE) {
     return { status: 'error', message: 'Edição de estoque só está disponível com o Supabase ativado.' };
   }
@@ -288,6 +290,7 @@ async function callEstoqueEditar({ id, produto, un, saldo, senha }) {
       p_produto: produto,
       p_un: un,
       p_saldo: saldo,
+      p_ata: (ata === true || ata === false) ? ata : null,
       p_senha: senha
     }),
     data => ({ item: mapEstoqueRowToItem(data) })
@@ -2918,7 +2921,7 @@ async function openEstoqueCategory(category) {
 
 function renderEstoqueLoadingState() {
   const tbody = document.getElementById('estoqueTableBody');
-  tbody.innerHTML = `<tr><td colspan="3" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Carregando itens do estoque...</td></tr>`;
+  tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Carregando itens do estoque...</td></tr>`;
 }
 
 function getCategoryForProduct(productName) {
@@ -2962,7 +2965,7 @@ function renderEstoqueTable() {
     const message = stockLevelsLoadFailed
       ? 'Não foi possível carregar os dados do estoque. Verifique sua conexão e tente novamente.'
       : 'Nenhum produto encontrado nesta categoria';
-    const colspan = canEdit ? 4 : 3;
+    const colspan = canEdit ? 5 : 4;
     tbody.innerHTML = `<tr><td colspan="${colspan}" style="text-align: center; color: ${stockLevelsLoadFailed ? 'var(--color-danger)' : 'var(--text-secondary)'}; padding: 2rem;">${message}</td></tr>`;
     return;
   }
@@ -2974,10 +2977,14 @@ function renderEstoqueTable() {
           ? '<span class="badge badge-success">Disponível</span>'
           : '<span class="badge badge-danger">Esgotado</span>')
       : formatDataLabelValue(item.total);
+    const ataCellHtml = item.ata === true
+      ? '<span class="badge badge-success">Sim</span>'
+      : (item.ata === false ? '<span class="badge badge-pending">Não</span>' : '<span style="color: var(--text-muted);">—</span>');
     tr.innerHTML = `
       <td style="font-weight: 600; color: var(--text-primary);">${item.produto}</td>
       <td style="color: var(--text-secondary); text-align: center;">${item.un}</td>
       <td style="font-weight: 500; text-align: center;">${qtyCellHtml}</td>
+      <td style="text-align: center;">${ataCellHtml}</td>
       ${canEdit ? `
       <td style="text-align: center;">
         <button type="button" class="estoque-edit-btn" title="Editar produto" aria-label="Editar produto">
@@ -3002,6 +3009,7 @@ function openEditarEstoqueItemModal(item) {
   document.getElementById('editarEstoqueProduto').value = item.produto;
   document.getElementById('editarEstoqueUnidade').value = item.un || '';
   document.getElementById('editarEstoqueQuantidade').value = item.total;
+  document.getElementById('editarEstoqueAta').value = item.ata === true ? 'true' : (item.ata === false ? 'false' : '');
   document.getElementById('editarEstoqueSenha').value = '';
   document.getElementById('editarEstoqueError').classList.add('hidden');
   document.getElementById('editarEstoqueItemModal').classList.remove('hidden');
@@ -3021,6 +3029,7 @@ async function handleConfirmEditarEstoqueItem() {
   const produto = document.getElementById('editarEstoqueProduto').value.trim();
   const un = document.getElementById('editarEstoqueUnidade').value.trim();
   const quantidadeStr = document.getElementById('editarEstoqueQuantidade').value;
+  const ataStr = document.getElementById('editarEstoqueAta').value;
   const senha = document.getElementById('editarEstoqueSenha').value;
 
   if (!produto) {
@@ -3048,6 +3057,7 @@ async function handleConfirmEditarEstoqueItem() {
       produto,
       un,
       saldo: Number(quantidadeStr),
+      ata: ataStr === '' ? null : (ataStr === 'true'),
       senha
     });
 
@@ -3075,6 +3085,9 @@ const PONTO_PEDIDO_YELLOW_MARGIN = 0.3; // 30% acima do Ponto de Pedido = status
 
 function initializePontoPedidoModule() {
   document.getElementById('pontoPedidoCategoryFilter').addEventListener('change', renderPontoPedidoTable);
+  document.getElementById('pontoPedidoPontoPedidoFilter').addEventListener('change', renderPontoPedidoTable);
+  document.getElementById('pontoPedidoAtaFilter').addEventListener('change', renderPontoPedidoTable);
+  document.getElementById('btnGerarPontoCompra').addEventListener('click', handleGerarPontoCompra);
 
   document.getElementById('btnAbrirPedidoObtencao').addEventListener('click', abrirPedidoObtencaoModal);
   document.getElementById('btnCancelPedidoObtencao').addEventListener('click', fecharPedidoObtencaoModal);
@@ -3148,31 +3161,81 @@ function aplicarPontoPedidoDaDemanda() {
   });
 }
 
-function renderPontoPedidoTable() {
-  const tbody = document.getElementById('pontoPedidoTableBody');
+/**
+ * Lê os 3 filtros da tela Ponto de Compra e devolve { categoria,
+ * pontoPedido ('todos'|'sim'|'nao'), ata ('' |'sim'|'nao') }.
+ */
+function lerFiltrosPontoCompra() {
   const categoriaEl = document.getElementById('pontoPedidoCategoryFilter');
-  const categoria = categoriaEl ? categoriaEl.value : '';
-  const actionsHeader = document.getElementById('pontoPedidoActionsHeader');
-  tbody.innerHTML = '';
+  const pontoPedidoEl = document.getElementById('pontoPedidoPontoPedidoFilter');
+  const ataEl = document.getElementById('pontoPedidoAtaFilter');
+  return {
+    categoria: categoriaEl ? categoriaEl.value : '',
+    pontoPedido: pontoPedidoEl ? pontoPedidoEl.value : 'todos',
+    ata: ataEl ? ataEl.value : ''
+  };
+}
 
-  const canEdit = podeEditarEstoque();
-  if (actionsHeader) actionsHeader.classList.toggle('hidden', !canEdit);
-
-  if (!categoria) {
-    tbody.innerHTML = `<tr><td colspan="${canEdit ? 5 : 4}" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Selecione uma categoria para consultar</td></tr>`;
-    return;
-  }
+/**
+ * Aplica os 3 filtros (Categoria, Ponto de Pedido, ATA) sobre stockData.
+ * Devolve null se a Categoria ou a ATA ainda não foram escolhidas (os dois
+ * filtros obrigatórios pra ter uma lista — Ponto de Pedido sozinho não
+ * define o suficiente, e a ATA decide qual fluxo o GERAR vai abrir).
+ */
+function getItensFiltradosPontoCompra() {
+  const { categoria, pontoPedido, ata } = lerFiltrosPontoCompra();
+  if (!categoria || !ata) return null;
 
   let items = stockData.filter(item =>
     getCategoryForProduct(item.produto).toLowerCase() === categoria.toLowerCase()
   );
-  items = items.slice().sort((a, b) => a.produto.localeCompare(b.produto));
+
+  if (pontoPedido === 'sim') {
+    // "Precisa de atenção": status Encomendar (vermelho) ou Próximo (amarelo).
+    items = items.filter(item => {
+      const status = getPontoPedidoStatus(item.total, item.pontoPedido);
+      return status === 'vermelho' || status === 'amarelo';
+    });
+  } else if (pontoPedido === 'nao') {
+    // Status Ok (verde) — estoque confortavelmente acima do Ponto de Pedido.
+    items = items.filter(item => getPontoPedidoStatus(item.total, item.pontoPedido) === 'verde');
+  }
+
+  items = items.filter(item => ata === 'sim' ? item.ata === true : item.ata !== true);
+
+  return items.slice().sort((a, b) => a.produto.localeCompare(b.produto));
+}
+
+function atualizarBotaoGerarPontoCompra() {
+  const btn = document.getElementById('btnGerarPontoCompra');
+  if (!btn) return;
+  const { categoria, ata } = lerFiltrosPontoCompra();
+  btn.disabled = !(categoria && ata);
+}
+
+function renderPontoPedidoTable() {
+  const tbody = document.getElementById('pontoPedidoTableBody');
+  const actionsHeader = document.getElementById('pontoPedidoActionsHeader');
+  tbody.innerHTML = '';
+
+  atualizarBotaoGerarPontoCompra();
+
+  const canEdit = podeEditarEstoque();
+  if (actionsHeader) actionsHeader.classList.toggle('hidden', !canEdit);
+  const colspan = canEdit ? 6 : 5;
+
+  const items = getItensFiltradosPontoCompra();
+
+  if (items === null) {
+    tbody.innerHTML = `<tr><td colspan="${colspan}" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Selecione ao menos a Categoria e a ATA para consultar</td></tr>`;
+    return;
+  }
 
   if (items.length === 0) {
     const message = stockLevelsLoadFailed
       ? 'Não foi possível carregar os dados do estoque. Verifique sua conexão e tente novamente.'
-      : 'Nenhum produto encontrado nesta categoria';
-    tbody.innerHTML = `<tr><td colspan="${canEdit ? 5 : 4}" style="text-align: center; color: ${stockLevelsLoadFailed ? 'var(--color-danger)' : 'var(--text-secondary)'}; padding: 2rem;">${message}</td></tr>`;
+      : 'Nenhum produto encontrado para esses filtros';
+    tbody.innerHTML = `<tr><td colspan="${colspan}" style="text-align: center; color: ${stockLevelsLoadFailed ? 'var(--color-danger)' : 'var(--text-secondary)'}; padding: 2rem;">${message}</td></tr>`;
     return;
   }
 
@@ -3191,10 +3254,15 @@ function renderPontoPedidoTable() {
       statusHtml = '<span style="color: var(--text-muted); font-size: 0.8125rem;">Sem ponto definido</span>';
     }
 
+    const ataHtml = item.ata === true
+      ? '<span class="badge badge-success">Sim</span>'
+      : (item.ata === false ? '<span class="badge badge-pending">Não</span>' : '<span style="color: var(--text-muted);">—</span>');
+
     tr.innerHTML = `
       <td style="font-weight: 600; color: var(--text-primary);">${item.produto}</td>
       <td style="font-weight: 500;">${formatDataLabelValue(item.total)}</td>
       <td style="color: var(--text-secondary);">${item.pontoPedido ? formatDataLabelValue(item.pontoPedido) : '—'}</td>
+      <td style="text-align: center;">${ataHtml}</td>
       <td>${statusHtml}</td>
       ${canEdit ? `
       <td style="text-align: center;">
@@ -3211,6 +3279,30 @@ function renderPontoPedidoTable() {
     }
     tbody.appendChild(tr);
   });
+}
+
+/**
+ * Botão GERAR da tela Ponto de Compra. Com ATA=Sim, reaproveita 100% o
+ * fluxo já existente do Pedido de Obtenção (mesmo modal, mesma geração de
+ * PDF/e-mail). Com ATA=Não, o fluxo de casamento com o CATMAT/Pesquisa de
+ * Preços ainda está em construção (próxima etapa combinada) — por ora só
+ * avisa.
+ */
+function handleGerarPontoCompra() {
+  const items = getItensFiltradosPontoCompra();
+  if (items === null) return;
+
+  if (items.length === 0) {
+    showToast("Nenhum produto encontrado para esses filtros.", "warning");
+    return;
+  }
+
+  const { ata } = lerFiltrosPontoCompra();
+  if (ata === 'sim') {
+    abrirPedidoObtencaoModalComItens(items);
+  } else {
+    showToast("O fluxo de casamento com o CATMAT para itens sem ATA ainda está em construção — combinamos de fazer essa parte na próxima etapa.", "warning");
+  }
 }
 
 let editarPontoPedidoItemAtual = null;
@@ -3339,7 +3431,18 @@ async function abrirPedidoObtencaoModal() {
     return;
   }
 
-  pedidoObtencaoItems = redItems
+  abrirPedidoObtencaoModalComItens(redItems);
+}
+
+/**
+ * Miolo de abrirPedidoObtencaoModal, extraído pra poder ser chamado também
+ * pelo botão GERAR da tela Ponto de Compra (ATA = Sim) — ambos os pontos de
+ * entrada só diferem na lista de produtos que alimenta o modal; o modal, a
+ * validação e a geração do PDF/e-mail são exatamente os mesmos de sempre.
+ * `items` é uma lista de produtos do Estoque (formato de stockData).
+ */
+function abrirPedidoObtencaoModalComItens(items) {
+  pedidoObtencaoItems = items
     .map(item => {
       const demanda = demandaData.find(d => d.material.toLowerCase() === item.produto.toLowerCase()) || null;
       return {
