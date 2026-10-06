@@ -3088,6 +3088,8 @@ function initializePontoPedidoModule() {
   document.getElementById('pontoPedidoPontoPedidoFilter').addEventListener('change', renderPontoPedidoTable);
   document.getElementById('pontoPedidoAtaFilter').addEventListener('change', renderPontoPedidoTable);
   document.getElementById('btnGerarPontoCompra').addEventListener('click', handleGerarPontoCompra);
+  document.getElementById('btnCancelarPontoCompraSelecionavel').addEventListener('click', handleCancelarPontoCompraSelecionavel);
+  document.getElementById('btnSeguintePontoCompraSelecionavel').addEventListener('click', handleSeguintePontoCompraSelecionavel);
 
   document.getElementById('btnAbrirPedidoObtencao').addEventListener('click', abrirPedidoObtencaoModal);
   document.getElementById('btnCancelPedidoObtencao').addEventListener('click', fecharPedidoObtencaoModal);
@@ -3301,8 +3303,672 @@ function handleGerarPontoCompra() {
   if (ata === 'sim') {
     abrirPedidoObtencaoModalComItens(items);
   } else {
-    showToast("O fluxo de casamento com o CATMAT para itens sem ATA ainda está em construção — combinamos de fazer essa parte na próxima etapa.", "warning");
+    iniciarFluxoCatmat(items);
   }
+}
+
+// =====================================================================
+// GERAR com ATA = Não: casamento por descrição com o catálogo do CATMAT
+// (PDM + Item) + Pesquisa de Preços do Compras.gov. A API oficial
+// (dadosabertos.compras.gov.br) não tem busca por palavra-chave de
+// verdade, só por código exato — por isso o casamento por texto é feito
+// aqui: compara o nome do produto contra um cache local dos ~15 mil PDMs
+// (tabela catmat_pdms) e, depois de escolhido o PDM, contra os itens reais
+// daquele PDM, buscados ao vivo (ver supabase-migracao/004_catmat.sql).
+// =====================================================================
+
+/** Maiúsculas, sem acento, só letras/números, quebrado em palavras. */
+function normalizarTextoBusca(s) {
+  return String(s || '')
+    .toUpperCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^A-Z0-9 ]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+/**
+ * Semelhança de Jaccard entre as palavras da consulta e as do candidato
+ * (tamanho da interseção / tamanho da união). Testado ao vivo contra o
+ * catálogo real: uma fração simples "quantas palavras da consulta
+ * aparecem no candidato" empatava candidatos claramente diferentes (ex.:
+ * "PROPELENTE LIQUIDO A GRANEL...") com o candidato certo (ex.: só
+ * "DETERGENTE") sempre que os dois compartilhavam uma palavra comum tipo
+ * "LIQUIDO" — o Jaccard penaliza candidatos com muita palavra extra
+ * irrelevante, então "DETERGENTE" sozinho pontua mais que textos longos
+ * que só colidem numa palavra genérica.
+ */
+function pontuarSemelhancaTexto(tokensConsulta, textoCandidato) {
+  const setConsulta = new Set(tokensConsulta);
+  const setCandidato = new Set(tokensSignificativos(textoCandidato));
+  if (setConsulta.size === 0 || setCandidato.size === 0) return 0;
+  let intersecao = 0;
+  setConsulta.forEach(t => { if (setCandidato.has(t)) intersecao++; });
+  const uniao = setConsulta.size + setCandidato.size - intersecao;
+  return uniao === 0 ? 0 : intersecao / uniao;
+}
+
+// Números (medidas como "500"/"200" quase nunca aparecem no nome de uma
+// família/PDM do CATMAT) e preposições/conectivos comuns (ex.: "LUVA DE
+// LATEX" — "DE" não identifica nada) — removidos tanto da pontuação quanto
+// da escolha de palavra de referência, pra não inflar à toa a semelhança de
+// candidatos que só compartilham uma palavra genérica com o produto.
+const PALAVRAS_IRRELEVANTES_BUSCA = new Set([
+  'DE', 'DA', 'DO', 'DAS', 'DOS', 'E', 'PARA', 'COM', 'SEM', 'EM', 'A', 'O', 'AS', 'OS'
+]);
+
+function tokensSignificativos(texto) {
+  return normalizarTextoBusca(texto).filter(t => !/^[0-9]+$/.test(t) && !PALAVRAS_IRRELEVANTES_BUSCA.has(t));
+}
+
+/** As até 2 palavras que realmente identificam o produto (ver tokensSignificativos). */
+function extrairPalavrasReferencia(nomeProduto) {
+  return tokensSignificativos(nomeProduto).slice(0, 2);
+}
+
+/**
+ * Filtra `lista` exigindo que o candidato contenha as palavras de
+ * referência do produto (ver extrairPalavrasReferencia) — tenta primeiro
+ * com as duas (primeira + segunda palavra), e só cai pra exigir só a
+ * primeira se isso não achar nada. Corrige um problema visto ao testar com
+ * produtos reais: pontuar por semelhança geral (Jaccard) deixava uma
+ * palavra genérica compartilhada (tipo "LÍQUIDO") valer quase o mesmo que a
+ * palavra que de fato identifica o produto, trazendo materiais sem nada a
+ * ver no meio dos resultados. Exigir a palavra de referência primeiro, e só
+ * DEPOIS ordenar por semelhança entre quem sobrou, resolve isso.
+ */
+function filtrarPorPalavrasReferencia(lista, extrairTexto, palavrasReferencia) {
+  if (palavrasReferencia.length === 0) return lista;
+
+  const contemTodas = (item, palavras) => {
+    const tokens = new Set(normalizarTextoBusca(extrairTexto(item)));
+    return palavras.every(p => tokens.has(p));
+  };
+
+  if (palavrasReferencia.length >= 2) {
+    const comAsDuas = lista.filter(item => contemTodas(item, palavrasReferencia.slice(0, 2)));
+    if (comAsDuas.length > 0) return comAsDuas;
+  }
+  return lista.filter(item => contemTodas(item, [palavrasReferencia[0]]));
+}
+
+let catmatPdmsCache = null;
+
+/** Carrega (uma vez só, fica em memória) os ~15 mil PDMs ativos do cache local. */
+async function carregarCatmatPdmsCache() {
+  if (catmatPdmsCache) return catmatPdmsCache;
+  const rows = await supabaseSelectAll('catmat_pdms');
+  catmatPdmsCache = rows.map(r => ({
+    codigoPdm: r.codigo_pdm,
+    nomePdm: r.nome_pdm,
+    codigoGrupo: r.codigo_grupo,
+    nomeGrupo: r.nome_grupo,
+    codigoClasse: r.codigo_classe,
+    nomeClasse: r.nome_classe
+  }));
+  return catmatPdmsCache;
+}
+
+/** Até 20 PDMs que contêm a(s) palavra(s) de referência, mais parecido primeiro. */
+async function buscarPdmsParecidos(nomeProduto) {
+  const pdms = await carregarCatmatPdmsCache();
+  const tokens = tokensSignificativos(nomeProduto);
+  const referencia = extrairPalavrasReferencia(nomeProduto);
+  const candidatos = filtrarPorPalavrasReferencia(pdms, p => p.nomePdm, referencia);
+
+  return candidatos
+    .map(p => Object.assign({}, p, { score: pontuarSemelhancaTexto(tokens, p.nomePdm) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 20);
+}
+
+/**
+ * Busca ao vivo até 500 itens de um PDM escolhido. Passa pelo Apps Script
+ * (SCRIPT_URL, ?action=catmat_itens_pdm) em vez de chamar a API do CATMAT
+ * direto — ela bloqueia com 403 qualquer requisição que chegue com cabeçalho
+ * Origin, ou seja, qualquer chamada direta do navegador (confirmado ao vivo:
+ * sem Origin funciona, com Origin não). O Apps Script já faz esse mesmo
+ * papel de ponte pro Drive e pro e-mail.
+ */
+async function buscarItensCatmatDoPdm(codigoPdm) {
+  const url = `${SCRIPT_URL}?action=catmat_itens_pdm&codigoPdm=${encodeURIComponent(codigoPdm)}`;
+  const response = await fetch(url, { method: 'GET', cache: 'no-store' });
+  if (!response.ok) throw new Error(`Falha ao consultar itens do CATMAT (HTTP ${response.status}).`);
+  const data = await response.json();
+  return (data.resultado || []).map(it => ({
+    codigoItem: it.codigoItem,
+    descricaoItem: it.descricaoItem
+  }));
+}
+
+/** Até 20 itens do PDM escolhido que contêm a(s) palavra(s) de referência, mais parecido primeiro. */
+function buscarItensParecidosNoPdm(nomeProduto, itensDoPdm) {
+  const tokens = tokensSignificativos(nomeProduto);
+  const referencia = extrairPalavrasReferencia(nomeProduto);
+  const candidatos = filtrarPorPalavrasReferencia(itensDoPdm, it => it.descricaoItem, referencia);
+
+  return candidatos
+    .map(it => Object.assign({}, it, { score: pontuarSemelhancaTexto(tokens, it.descricaoItem) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 20);
+}
+
+/**
+ * Pesquisa de Preços de um item do CATMAT (últimas compras no governo).
+ * Também passa pelo Apps Script (mesmo motivo de buscarItensCatmatDoPdm) —
+ * o fallback "sem filtro de data se o último ano vier vazio" agora mora no
+ * Code.gs (proxyCatmatPesquisaPreco), já que quem faz a chamada de verdade
+ * é ele.
+ */
+async function buscarPesquisaDePrecos(codigoItem) {
+  const url = `${SCRIPT_URL}?action=catmat_pesquisa_preco&codigoItem=${encodeURIComponent(codigoItem)}`;
+  const response = await fetch(url, { method: 'GET', cache: 'no-store' });
+  if (!response.ok) throw new Error(`Falha ao consultar a Pesquisa de Preços (HTTP ${response.status}).`);
+  const data = await response.json();
+  const resultados = data.resultado || [];
+
+  return resultados
+    .slice()
+    .sort((a, b) => new Date(b.dataCompra) - new Date(a.dataCompra))
+    .slice(0, 5)
+    .map(r => ({
+      dataCompra: r.dataCompra,
+      precoUnitario: Number(r.precoUnitario) || 0,
+      nomeFornecedor: r.nomeFornecedor || '',
+      nomeUasg: r.nomeUasg || '',
+      estado: r.estado || ''
+    }));
+}
+
+/** Cria/atualiza os dados de fornecedor de um material na Demanda. */
+async function callDemandaEditarFornecedor({ material, descricaoFornecedor, unidade, quantidade, valorUnitario, catmat, senha }) {
+  if (!USE_SUPABASE) {
+    return { status: 'error', message: 'Essa funcionalidade só está disponível com o Supabase ativado.' };
+  }
+  return rpcResultParaRespostaLegada(
+    await supabaseClient.rpc('demanda_editar_fornecedor', {
+      p_material: material,
+      p_descricao_fornecedor: descricaoFornecedor,
+      p_unidade: unidade,
+      p_quantidade: quantidade,
+      p_valor_unitario: (valorUnitario !== undefined && valorUnitario !== null && valorUnitario !== '') ? valorUnitario : null,
+      p_catmat: catmat,
+      p_senha: senha
+    }),
+    data => ({ item: mapDemandaRowToItem(data) })
+  );
+}
+
+// --- Estado e telas do fluxo (lista selecionável -> casamento por item) ---
+
+let catmatFlowItens = [];        // [{produto, estoqueAtual, pontoPedido, un}]
+let catmatFlowSelecionados = []; // paralelo a catmatFlowItens: boolean
+let catmatFlowIndex = 0;
+let catmatFlowResultados = [];   // paralelo aos itens selecionados: null (pulado) ou {descricaoFornecedor, unidade, quantidade, valorUnitario, catmat}
+let catmatFlowEtapa = 'pdm';     // 'pdm' | 'item' | 'preco' | 'final'
+let catmatFlowPdmEscolhido = null;
+let catmatFlowItensCatmat = [];
+let catmatFlowItemEscolhido = null;
+let catmatFlowPrecoEscolhido = null;
+
+function mostrarPontoCompraScreen(screen) {
+  document.getElementById('pontoCompraFiltrosSection').classList.toggle('hidden', screen !== 'filtros');
+  document.getElementById('pontoCompraSelecionavelSection').classList.toggle('hidden', screen !== 'selecionavel');
+  document.getElementById('pontoCompraCasamentoSection').classList.toggle('hidden', screen !== 'casamento');
+}
+
+function iniciarFluxoCatmat(items) {
+  catmatFlowItens = items.map(item => ({ produto: item.produto, estoqueAtual: item.total, pontoPedido: item.pontoPedido, un: item.un }));
+  catmatFlowSelecionados = catmatFlowItens.map(() => true);
+  renderPontoCompraSelecionavelLista();
+  mostrarPontoCompraScreen('selecionavel');
+}
+
+function renderPontoCompraSelecionavelLista() {
+  const container = document.getElementById('pontoCompraSelecionavelLista');
+  container.innerHTML = '';
+
+  catmatFlowItens.forEach((item, index) => {
+    const row = document.createElement('div');
+    row.className = 'pedido-obtencao-item-row';
+
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = catmatFlowSelecionados[index];
+    checkbox.addEventListener('change', (e) => {
+      catmatFlowSelecionados[index] = e.target.checked;
+    });
+    row.appendChild(checkbox);
+
+    const info = document.createElement('div');
+    info.innerHTML = `
+      <div class="pedido-obtencao-item-name">${item.produto}</div>
+      <div class="pedido-obtencao-item-meta">Estoque atual: ${formatDataLabelValue(item.estoqueAtual)}${item.pontoPedido ? ` · Ponto de Pedido: ${formatDataLabelValue(item.pontoPedido)}` : ''}</div>
+    `;
+    row.appendChild(info);
+
+    container.appendChild(row);
+  });
+}
+
+function handleCancelarPontoCompraSelecionavel() {
+  mostrarPontoCompraScreen('filtros');
+}
+
+function handleSeguintePontoCompraSelecionavel() {
+  const selecionados = catmatFlowItens.filter((_, idx) => catmatFlowSelecionados[idx]);
+  if (selecionados.length === 0) {
+    showToast("Selecione pelo menos um item.", "warning");
+    return;
+  }
+  catmatFlowItens = selecionados;
+  catmatFlowResultados = selecionados.map(() => null);
+  catmatFlowIndex = 0;
+  mostrarPontoCompraScreen('casamento');
+  iniciarEtapaPdmDoItemAtual();
+}
+
+function itemAtualDoFluxoCatmat() {
+  return catmatFlowItens[catmatFlowIndex];
+}
+
+async function iniciarEtapaPdmDoItemAtual() {
+  catmatFlowEtapa = 'pdm';
+  catmatFlowPdmEscolhido = null;
+  catmatFlowItensCatmat = [];
+  catmatFlowItemEscolhido = null;
+  catmatFlowPrecoEscolhido = null;
+
+  const item = itemAtualDoFluxoCatmat();
+  atualizarTituloCasamentoCatmat();
+
+  const conteudo = document.getElementById('pontoCompraCasamentoConteudo');
+  conteudo.innerHTML = '<p style="color: var(--text-secondary);">Buscando materiais parecidos no catálogo do CATMAT...</p>';
+
+  try {
+    const candidatos = await buscarPdmsParecidos(item.produto);
+    renderCatmatEtapaPdm(candidatos);
+  } catch (error) {
+    console.error("Erro ao buscar PDMs do CATMAT:", error);
+    conteudo.innerHTML = `<p style="color: var(--color-danger);">Erro ao consultar o catálogo do CATMAT: ${error.message}</p>`;
+    renderCatmatBotoesNavegacao({ permitirPular: true });
+  }
+}
+
+function atualizarTituloCasamentoCatmat() {
+  const item = itemAtualDoFluxoCatmat();
+  const titulo = document.getElementById('pontoCompraCasamentoTitulo');
+  titulo.textContent = `Item ${catmatFlowIndex + 1} de ${catmatFlowItens.length} — ${item.produto}`;
+}
+
+function renderCatmatEtapaPdm(candidatos) {
+  const conteudo = document.getElementById('pontoCompraCasamentoConteudo');
+  conteudo.innerHTML = '';
+
+  const intro = document.createElement('p');
+  intro.style.cssText = 'color: var(--text-secondary); margin-bottom: 1rem;';
+  intro.textContent = 'Escolha a família de material (PDM) mais parecida com o produto:';
+  conteudo.appendChild(intro);
+
+  const lista = document.createElement('div');
+  lista.className = 'liberacao-items-list';
+  lista.style.maxHeight = '320px';
+
+  if (candidatos.length === 0) {
+    lista.innerHTML = '<p style="color: var(--text-secondary);">Nenhuma família de material parecida foi encontrada — pule este item ou tente renomear o produto no Estoque pra algo mais parecido com um nome de catálogo.</p>';
+  } else {
+    candidatos.forEach(pdm => {
+      const row = document.createElement('div');
+      row.className = 'pedido-obtencao-item-row catmat-candidato-row';
+      row.innerHTML = `
+        <div style="flex: 1;">
+          <div class="pedido-obtencao-item-name">${pdm.nomePdm}</div>
+          <div class="pedido-obtencao-item-meta">${pdm.nomeGrupo || ''}${pdm.nomeClasse ? ' › ' + pdm.nomeClasse : ''}</div>
+        </div>
+        <span class="catmat-score-badge">${Math.round(pdm.score * 100)}%</span>
+      `;
+      row.addEventListener('click', () => handleEscolherPdm(pdm));
+      lista.appendChild(row);
+    });
+  }
+
+  conteudo.appendChild(lista);
+  renderCatmatBotoesNavegacao({ permitirPular: true });
+}
+
+async function handleEscolherPdm(pdm) {
+  catmatFlowPdmEscolhido = pdm;
+  catmatFlowEtapa = 'item';
+
+  const conteudo = document.getElementById('pontoCompraCasamentoConteudo');
+  conteudo.innerHTML = '<p style="color: var(--text-secondary);">Buscando itens dessa família no catálogo...</p>';
+
+  try {
+    const itensDoPdm = await buscarItensCatmatDoPdm(pdm.codigoPdm);
+    catmatFlowItensCatmat = itensDoPdm;
+    const item = itemAtualDoFluxoCatmat();
+    const candidatos = buscarItensParecidosNoPdm(item.produto, itensDoPdm);
+    renderCatmatEtapaItem(candidatos);
+  } catch (error) {
+    console.error("Erro ao buscar itens do CATMAT:", error);
+    conteudo.innerHTML = `<p style="color: var(--color-danger);">Erro ao consultar os itens dessa família: ${error.message}</p>`;
+    renderCatmatBotoesNavegacao({ permitirVoltar: true, permitirPular: true });
+  }
+}
+
+function renderCatmatEtapaItem(candidatos) {
+  const conteudo = document.getElementById('pontoCompraCasamentoConteudo');
+  conteudo.innerHTML = '';
+
+  const intro = document.createElement('p');
+  intro.style.cssText = 'color: var(--text-secondary); margin-bottom: 1rem;';
+  intro.textContent = `Família escolhida: ${catmatFlowPdmEscolhido.nomePdm}. Agora escolha o item mais parecido:`;
+  conteudo.appendChild(intro);
+
+  const lista = document.createElement('div');
+  lista.className = 'liberacao-items-list';
+  lista.style.maxHeight = '320px';
+
+  if (candidatos.length === 0) {
+    lista.innerHTML = '<p style="color: var(--text-secondary);">Nenhum item foi encontrado nessa família.</p>';
+  } else {
+    candidatos.forEach(it => {
+      const row = document.createElement('div');
+      row.className = 'pedido-obtencao-item-row catmat-candidato-row';
+      row.innerHTML = `
+        <div style="flex: 1;">
+          <div class="pedido-obtencao-item-name">${it.descricaoItem}</div>
+          <div class="pedido-obtencao-item-meta">CATMAT ${it.codigoItem}</div>
+        </div>
+        <span class="catmat-score-badge">${Math.round(it.score * 100)}%</span>
+      `;
+      row.addEventListener('click', () => handleEscolherItemCatmat(it));
+      lista.appendChild(row);
+    });
+  }
+
+  conteudo.appendChild(lista);
+  renderCatmatBotoesNavegacao({ permitirVoltar: true, permitirPular: true });
+}
+
+async function handleEscolherItemCatmat(it) {
+  catmatFlowItemEscolhido = it;
+  catmatFlowEtapa = 'preco';
+
+  const conteudo = document.getElementById('pontoCompraCasamentoConteudo');
+  conteudo.innerHTML = '<p style="color: var(--text-secondary);">Consultando a Pesquisa de Preços...</p>';
+
+  try {
+    const precos = await buscarPesquisaDePrecos(it.codigoItem);
+    renderCatmatEtapaPreco(precos);
+  } catch (error) {
+    console.error("Erro ao buscar a Pesquisa de Preços:", error);
+    renderCatmatEtapaPreco([]);
+    showToast("Não foi possível consultar a Pesquisa de Preços — você pode digitar o valor manualmente.", "warning");
+  }
+}
+
+function formatarDataBR(isoDate) {
+  if (!isoDate) return '—';
+  const d = isoDateStrToLocalDate(isoDate);
+  return d ? d.toLocaleDateString('pt-BR') : isoDate;
+}
+
+function renderCatmatEtapaPreco(precos) {
+  const conteudo = document.getElementById('pontoCompraCasamentoConteudo');
+  conteudo.innerHTML = '';
+
+  const intro = document.createElement('p');
+  intro.style.cssText = 'color: var(--text-secondary); margin-bottom: 1rem;';
+  intro.textContent = precos.length > 0
+    ? 'Últimas compras desse item no governo — clique na que quiser usar como referência:'
+    : 'Nenhuma compra recente foi encontrada pra esse item na Pesquisa de Preços — você pode seguir e digitar o valor manualmente.';
+  conteudo.appendChild(intro);
+
+  const lista = document.createElement('div');
+  lista.className = 'liberacao-items-list';
+  lista.style.maxHeight = '320px';
+
+  precos.forEach(p => {
+    const row = document.createElement('div');
+    row.className = 'pedido-obtencao-item-row catmat-candidato-row';
+    row.innerHTML = `
+      <div style="flex: 1;">
+        <div class="pedido-obtencao-item-name">${formatCurrencyBRL(p.precoUnitario)}</div>
+        <div class="pedido-obtencao-item-meta">${p.nomeFornecedor} · ${formatarDataBR(p.dataCompra)} · ${p.nomeUasg}${p.estado ? ' (' + p.estado + ')' : ''}</div>
+      </div>
+    `;
+    row.addEventListener('click', () => handleEscolherPreco(p));
+    lista.appendChild(row);
+  });
+
+  conteudo.appendChild(lista);
+  renderCatmatBotoesNavegacao({ permitirVoltar: true, permitirPular: true, permitirSemPreco: true });
+}
+
+function handleEscolherPreco(preco) {
+  catmatFlowPrecoEscolhido = preco;
+  renderCatmatEtapaFinal();
+}
+
+function handleSemPreco() {
+  catmatFlowPrecoEscolhido = null;
+  renderCatmatEtapaFinal();
+}
+
+function renderCatmatEtapaFinal() {
+  catmatFlowEtapa = 'final';
+  const item = itemAtualDoFluxoCatmat();
+  const conteudo = document.getElementById('pontoCompraCasamentoConteudo');
+
+  const descricaoPadrao = catmatFlowItemEscolhido ? catmatFlowItemEscolhido.descricaoItem : item.produto;
+  const valorPadrao = catmatFlowPrecoEscolhido ? catmatFlowPrecoEscolhido.precoUnitario : '';
+
+  conteudo.innerHTML = `
+    <div class="filter-group" style="margin-bottom: 1rem;">
+      <label for="catmatFinalDescricao">Descrição (pode editar)</label>
+      <textarea id="catmatFinalDescricao" rows="3">${descricaoPadrao}</textarea>
+    </div>
+    <div class="filter-group" style="margin-bottom: 1rem;">
+      <label for="catmatFinalQuantidade">Quantidade a comprar</label>
+      <input type="number" id="catmatFinalQuantidade" min="1" step="1" value="1">
+    </div>
+    <div class="filter-group" style="margin-bottom: 1rem;">
+      <label for="catmatFinalValorUnitario">Valor unitário (R$)</label>
+      <input type="number" id="catmatFinalValorUnitario" min="0" step="0.01" value="${valorPadrao}">
+    </div>
+    <div class="filter-group" style="margin-bottom: 1rem; flex-direction: row; align-items: center; gap: 0.5rem;">
+      <input type="checkbox" id="catmatFinalSalvarDemanda" style="width: auto;" checked>
+      <label for="catmatFinalSalvarDemanda" style="margin: 0;">Salvar esse fornecedor neste produto, pra não precisar pesquisar de novo</label>
+    </div>
+    <div class="filter-group" id="catmatFinalSenhaGroup" style="margin-bottom: 1rem;">
+      <label for="catmatFinalSenha">Senha da Diretoria</label>
+      <input type="password" id="catmatFinalSenha" placeholder="Digite a senha...">
+    </div>
+    <p id="catmatFinalError" class="modal-error-text hidden"></p>
+  `;
+
+  document.getElementById('catmatFinalSalvarDemanda').addEventListener('change', (e) => {
+    document.getElementById('catmatFinalSenhaGroup').classList.toggle('hidden', !e.target.checked);
+  });
+
+  renderCatmatBotoesNavegacao({ permitirVoltar: true, permitirPular: true, permitirConfirmar: true });
+}
+
+/**
+ * Monta os botões de navegação do rodapé do fluxo de casamento, variando
+ * conforme a etapa atual (nem toda etapa tem "Voltar" ou "Confirmar item").
+ */
+function renderCatmatBotoesNavegacao({ permitirVoltar = false, permitirPular = false, permitirSemPreco = false, permitirConfirmar = false } = {}) {
+  const conteudo = document.getElementById('pontoCompraCasamentoConteudo');
+
+  const nav = document.createElement('div');
+  nav.className = 'form-actions';
+  nav.style.marginTop = '1.5rem';
+
+  if (permitirVoltar) {
+    const btnVoltar = document.createElement('button');
+    btnVoltar.type = 'button';
+    btnVoltar.className = 'btn btn-secondary';
+    btnVoltar.textContent = 'Voltar';
+    btnVoltar.addEventListener('click', handleVoltarEtapaCatmat);
+    nav.appendChild(btnVoltar);
+  }
+
+  if (permitirSemPreco) {
+    const btnSemPreco = document.createElement('button');
+    btnSemPreco.type = 'button';
+    btnSemPreco.className = 'btn btn-secondary';
+    btnSemPreco.textContent = 'Seguir sem escolher um preço';
+    btnSemPreco.addEventListener('click', handleSemPreco);
+    nav.appendChild(btnSemPreco);
+  }
+
+  if (permitirPular) {
+    const btnPular = document.createElement('button');
+    btnPular.type = 'button';
+    btnPular.className = 'btn btn-secondary';
+    btnPular.textContent = 'Pular este item';
+    btnPular.addEventListener('click', handlePularItemCatmat);
+    nav.appendChild(btnPular);
+  }
+
+  if (permitirConfirmar) {
+    const btnConfirmar = document.createElement('button');
+    btnConfirmar.type = 'button';
+    btnConfirmar.id = 'btnConfirmarItemCatmat';
+    btnConfirmar.className = 'btn btn-submit';
+    btnConfirmar.textContent = 'Confirmar item';
+    btnConfirmar.addEventListener('click', handleConfirmarItemCatmat);
+    nav.appendChild(btnConfirmar);
+  }
+
+  conteudo.appendChild(nav);
+}
+
+function handleVoltarEtapaCatmat() {
+  if (catmatFlowEtapa === 'item') {
+    iniciarEtapaPdmDoItemAtual();
+  } else if (catmatFlowEtapa === 'preco') {
+    renderCatmatEtapaItem(buscarItensParecidosNoPdm(itemAtualDoFluxoCatmat().produto, catmatFlowItensCatmat));
+    catmatFlowEtapa = 'item';
+  } else if (catmatFlowEtapa === 'final') {
+    handleEscolherItemCatmat(catmatFlowItemEscolhido);
+  }
+}
+
+function avancarParaProximoItemCatmat() {
+  catmatFlowIndex++;
+  if (catmatFlowIndex < catmatFlowItens.length) {
+    iniciarEtapaPdmDoItemAtual();
+  } else {
+    finalizarFluxoCatmat();
+  }
+}
+
+function handlePularItemCatmat() {
+  catmatFlowResultados[catmatFlowIndex] = null;
+  avancarParaProximoItemCatmat();
+}
+
+async function handleConfirmarItemCatmat() {
+  const errorEl = document.getElementById('catmatFinalError');
+  errorEl.classList.add('hidden');
+
+  const descricao = document.getElementById('catmatFinalDescricao').value.trim();
+  const quantidadeStr = document.getElementById('catmatFinalQuantidade').value;
+  const valorStr = document.getElementById('catmatFinalValorUnitario').value;
+  const salvar = document.getElementById('catmatFinalSalvarDemanda').checked;
+  const senha = document.getElementById('catmatFinalSenha').value;
+
+  if (!descricao) {
+    errorEl.textContent = 'Informe a descrição do item.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  if (quantidadeStr === '' || Number(quantidadeStr) <= 0) {
+    errorEl.textContent = 'Informe uma quantidade válida (maior que zero).';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  if (salvar && !senha) {
+    errorEl.textContent = 'Informe a senha da Diretoria pra salvar o fornecedor, ou desmarque a opção acima.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  const item = itemAtualDoFluxoCatmat();
+  const resultado = {
+    descricaoFornecedor: descricao,
+    unidade: item.un || '',
+    quantidade: Number(quantidadeStr),
+    valorUnitario: valorStr === '' ? 0 : Number(valorStr),
+    catmat: catmatFlowItemEscolhido ? String(catmatFlowItemEscolhido.codigoItem) : ''
+  };
+
+  if (salvar) {
+    const confirmBtn = document.getElementById('btnConfirmarItemCatmat');
+    setButtonProcessing(confirmBtn, 'Salvando...');
+    try {
+      const resData = await callDemandaEditarFornecedor({
+        material: item.produto,
+        descricaoFornecedor: resultado.descricaoFornecedor,
+        unidade: resultado.unidade,
+        quantidade: resultado.quantidade,
+        valorUnitario: resultado.valorUnitario,
+        catmat: resultado.catmat,
+        senha
+      });
+      if (!resData || resData.status !== 'success') {
+        throw new Error(resData.message || 'Erro ao salvar o fornecedor.');
+      }
+    } catch (error) {
+      console.error("Erro ao salvar fornecedor na Demanda:", error);
+      errorEl.textContent = error.message || 'Erro ao salvar o fornecedor. Tente novamente.';
+      errorEl.classList.remove('hidden');
+      clearButtonProcessing(confirmBtn);
+      return;
+    }
+    clearButtonProcessing(confirmBtn);
+  }
+
+  catmatFlowResultados[catmatFlowIndex] = resultado;
+  avancarParaProximoItemCatmat();
+}
+
+function finalizarFluxoCatmat() {
+  pedidoObtencaoItems = catmatFlowItens
+    .map((item, idx) => ({ item, resultado: catmatFlowResultados[idx] }))
+    .filter(({ resultado }) => resultado)
+    .map(({ item, resultado }) => ({
+      produto: item.produto,
+      estoqueAtual: item.estoqueAtual,
+      pontoPedido: item.pontoPedido,
+      demanda: {
+        material: item.produto,
+        descricaoFornecedor: resultado.descricaoFornecedor,
+        unidade: resultado.unidade,
+        qtdMinima: resultado.quantidade,
+        multiplicador: 1,
+        valorUnitario: resultado.valorUnitario || 0,
+        catmat: resultado.catmat || ''
+      },
+      selecionado: true
+    }))
+    .sort((a, b) => a.produto.localeCompare(b.produto));
+
+  mostrarPontoCompraScreen('filtros');
+
+  if (pedidoObtencaoItems.length === 0) {
+    showToast("Nenhum item foi resolvido — nenhum Pedido de Obtenção foi gerado.", "warning");
+    return;
+  }
+
+  document.getElementById('pedidoObtencaoNumero').value = '';
+  document.getElementById('pedidoObtencaoEmails').value = '';
+  document.getElementById('pedidoObtencaoError').classList.add('hidden');
+  renderPedidoObtencaoItemsList();
+  document.getElementById('pedidoObtencaoModal').classList.remove('hidden');
 }
 
 let editarPontoPedidoItemAtual = null;

@@ -203,6 +203,24 @@ function autorizarEnvioDeEmail() {
 }
 
 /**
+ * SÓ PRECISA RODAR UMA VEZ, MANUALMENTE, PELO EDITOR DO APPS SCRIPT.
+ * Concede ao script a permissão de fazer chamadas de rede externas
+ * (UrlFetchApp), necessária pro proxy do CATMAT/Pesquisa de Preços da tela
+ * Ponto de Compra (ver proxyCatmatItensPdm/proxyCatmatPesquisaPreco). Sem
+ * rodar isso uma vez, chamadas feitas de fora (pelo site) falham com
+ * "Você não tem permissão para chamar UrlFetchApp.fetch". Consulta um PDM
+ * de teste (DETERGENTE, código 6136) só pra confirmar que a autorização
+ * foi concedida — não grava nada em lugar nenhum.
+ */
+function autorizarAcessoExterno() {
+  const response = UrlFetchApp.fetch(
+    'https://dadosabertos.compras.gov.br/modulo-material/4_consultarItemMaterial?codigoPdm=6136&pagina=1&tamanhoPagina=10&statusItem=true',
+    { muteHttpExceptions: true }
+  );
+  Logger.log('Autorização concedida. Resposta de teste: ' + response.getResponseCode());
+}
+
+/**
  * FERRAMENTA DE LIMPEZA — RODAR MANUALMENTE, UMA VEZ, PELO EDITOR DO APPS SCRIPT.
  *
  * A aba "Estoque" acumulou muitas linhas duplicadas (o mesmo produto
@@ -942,6 +960,12 @@ function doGet(e) {
     if (e && e.parameter && e.parameter.action === "demanda") {
       return getDemandaData();
     }
+    if (e && e.parameter && e.parameter.action === "catmat_itens_pdm") {
+      return proxyCatmatItensPdm(e.parameter.codigoPdm);
+    }
+    if (e && e.parameter && e.parameter.action === "catmat_pesquisa_preco") {
+      return proxyCatmatPesquisaPreco(e.parameter.codigoItem);
+    }
 
     return ContentService
       .createTextOutput(JSON.stringify({ status: "ok", message: "Web App ativo." }))
@@ -952,6 +976,61 @@ function doGet(e) {
       .createTextOutput(JSON.stringify({ status: "error", message: err.message }))
       .setMimeType(ContentService.MimeType.JSON);
   }
+}
+
+// --- PROXY PRO CATMAT / PESQUISA DE PREÇOS (Ponto de Compra, ATA=Não) ---
+//
+// A API do governo (dadosabertos.compras.gov.br) bloqueia com 403 qualquer
+// requisição que chegue com cabeçalho Origin — ou seja, qualquer chamada
+// direta do navegador (confirmado testando ao vivo: sem Origin funciona,
+// com Origin dá 403). UrlFetchApp do Apps Script faz a chamada do lado do
+// servidor, sem Origin, então funciona normalmente — mesmo papel de ponte
+// que o Code.gs já faz pro Drive e pro e-mail.
+
+const CATMAT_API_BASE = 'https://dadosabertos.compras.gov.br';
+
+/** Até 500 itens de um PDM (Padrão Descritivo de Material) do CATMAT. */
+function proxyCatmatItensPdm(codigoPdm) {
+  const url = CATMAT_API_BASE + '/modulo-material/4_consultarItemMaterial'
+    + '?codigoPdm=' + encodeURIComponent(codigoPdm)
+    + '&pagina=1&tamanhoPagina=500&statusItem=true';
+  const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  return ContentService
+    .createTextOutput(response.getContentText())
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Pesquisa de Preços de um item do CATMAT: tenta primeiro só o último ano;
+ * se não achar nada (comum pra itens pouco comprados), tenta sem filtro de
+ * data — mesma lógica de fallback que estava em app.js antes de precisar
+ * virar chamada pelo proxy.
+ */
+function proxyCatmatPesquisaPreco(codigoItem) {
+  const hoje = new Date();
+  const umAnoAtras = new Date(hoje.getFullYear() - 1, hoje.getMonth(), hoje.getDate());
+  const fmt = function (d) { return Utilities.formatDate(d, 'UTC', 'yyyy-MM-dd'); };
+
+  function consultar(comFiltroData) {
+    let url = CATMAT_API_BASE + '/modulo-pesquisa-preco/1_consultarMaterial'
+      + '?tipo=codigoItemCatalogo&codigo=' + encodeURIComponent(codigoItem)
+      + '&pagina=1&tamanhoPagina=10';
+    if (comFiltroData) {
+      url += '&dataCompraInicio=' + fmt(umAnoAtras) + '&dataCompraFim=' + fmt(hoje);
+    }
+    const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    const data = JSON.parse(response.getContentText());
+    return (data && data.resultado) || [];
+  }
+
+  let resultado = consultar(true);
+  if (resultado.length === 0) {
+    resultado = consultar(false);
+  }
+
+  return ContentService
+    .createTextOutput(JSON.stringify({ resultado: resultado }))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 /**

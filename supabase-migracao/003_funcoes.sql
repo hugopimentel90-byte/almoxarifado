@@ -525,6 +525,67 @@ end;
 $$;
 
 -- =====================================================================
+-- demanda_editar_fornecedor: cria ou atualiza os dados de fornecedor de um
+-- material na Demanda (descrição, unidade, quantidade a comprar, valor
+-- unitário e CATMAT) — usado pela Parte 2 do Ponto de Compra, depois do
+-- casamento por descrição com o catálogo do CATMAT + Pesquisa de Preços
+-- (ATA = Não). Mesmo padrão de demanda_editar_ponto_pedido (upsert por
+-- nome, senha da Diretoria), mas NÃO mexe em ponto_pedido — os dois campos
+-- são independentes um do outro.
+--
+-- qtd_minima recebe a quantidade informada e multiplicador fica fixo em 1
+-- — a Demanda antiga usava os dois campos multiplicados pra compor a
+-- quantidade final (ver gerarPedidoObtencaoDoc), mas a tela nova só pede
+-- uma "Quantidade" só, então simplificamos aqui dentro em vez de criar um
+-- segundo campo na tela sem necessidade.
+-- =====================================================================
+create or replace function demanda_editar_fornecedor(
+  p_material text,
+  p_descricao_fornecedor text,
+  p_unidade text,
+  p_quantidade numeric,
+  p_valor_unitario numeric,
+  p_catmat text,
+  p_senha text
+) returns demanda
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_diretoria_senha constant text := 'diretoria321';
+  v_material text := trim(coalesce(p_material, ''));
+  v_row demanda;
+begin
+  if p_senha is distinct from v_diretoria_senha then
+    raise exception 'Senha da Diretoria incorreta.';
+  end if;
+  if v_material = '' then
+    raise exception 'Produto não informado.';
+  end if;
+  if p_quantidade is null or p_quantidade <= 0 then
+    raise exception 'Informe uma quantidade válida (maior que zero).';
+  end if;
+  if p_valor_unitario is not null and p_valor_unitario < 0 then
+    raise exception 'O valor unitário não pode ser negativo.';
+  end if;
+
+  insert into demanda (material, descricao_fornecedor, unidade, qtd_minima, multiplicador, valor_unitario, catmat)
+  values (v_material, nullif(trim(coalesce(p_descricao_fornecedor, '')), ''), nullif(trim(coalesce(p_unidade, '')), ''), p_quantidade, 1, p_valor_unitario, nullif(trim(coalesce(p_catmat, '')), ''))
+  on conflict (lower(material)) do update
+    set descricao_fornecedor = excluded.descricao_fornecedor,
+        unidade = excluded.unidade,
+        qtd_minima = excluded.qtd_minima,
+        multiplicador = excluded.multiplicador,
+        valor_unitario = excluded.valor_unitario,
+        catmat = excluded.catmat
+  returning * into v_row;
+
+  return v_row;
+end;
+$$;
+
+-- =====================================================================
 -- Permissões: as 4 tabelas só aceitam leitura via RLS (002_rls.sql); toda
 -- escrita passa obrigatoriamente por uma destas funções.
 -- =====================================================================
@@ -537,3 +598,4 @@ grant execute on function liberacao_excluir(text) to anon, authenticated;
 grant execute on function liberacao_registrar_retirada(text, text, text, text, numeric) to anon, authenticated;
 grant execute on function estoque_editar(bigint, text, text, numeric, boolean, text) to anon, authenticated;
 grant execute on function demanda_editar_ponto_pedido(text, numeric, text) to anon, authenticated;
+grant execute on function demanda_editar_fornecedor(text, text, text, numeric, numeric, text, text) to anon, authenticated;

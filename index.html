@@ -1152,7 +1152,7 @@
           </button>
         </header>
 
-        <section class="table-card">
+        <section class="table-card" id="pontoCompraFiltrosSection">
           <div class="table-header">
             <div class="table-title">Produtos por Categoria</div>
             <div class="table-header-actions">
@@ -1203,6 +1203,30 @@
               </tbody>
             </table>
           </div>
+        </section>
+
+        <!-- Lista selecionável de itens sem ATA (GERAR com ATA=Não) — mesmo padrão
+             visual da lista do Pedido de Obtenção (.pedido-obtencao-item-row). -->
+        <section class="table-card hidden" id="pontoCompraSelecionavelSection">
+          <div class="table-header">
+            <div class="table-title">Selecione os itens que vão para a pesquisa de preço</div>
+          </div>
+          <div class="liberacao-items-list" id="pontoCompraSelecionavelLista" style="padding: 1rem 1.5rem; max-height: none;"></div>
+          <div class="form-actions" style="padding: 0 1.5rem 1.5rem;">
+            <button id="btnCancelarPontoCompraSelecionavel" class="btn btn-secondary">Cancelar</button>
+            <button id="btnSeguintePontoCompraSelecionavel" class="btn btn-submit">Seguinte</button>
+          </div>
+        </section>
+
+        <!-- Casamento por item com o CATMAT + Pesquisa de Preços — um item do lote
+             por vez, 4 etapas (PDM -> Item CATMAT -> Preço -> descrição/quantidade
+             final). Todo o conteúdo é montado dinamicamente pelo app.js
+             (renderCatmatEtapaAtual), por isso só tem um container vazio aqui. -->
+        <section class="table-card hidden" id="pontoCompraCasamentoSection">
+          <div class="table-header">
+            <div class="table-title" id="pontoCompraCasamentoTitulo">Casamento com o CATMAT</div>
+          </div>
+          <div id="pontoCompraCasamentoConteudo" style="padding: 1.5rem;"></div>
         </section>
       </main>
 

@@ -2483,3 +2483,26 @@ tr:hover td { background-color: var(--bg-primary); }
   color: var(--color-warning);
   margin-top: 0.25rem;
 }
+
+/* Linhas de candidato clicáveis do casamento com o CATMAT (escolha de PDM,
+   item do catálogo e preço da Pesquisa de Preços — Ponto de Compra, ATA=Não). */
+.catmat-candidato-row {
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.catmat-candidato-row:hover {
+  border-color: var(--color-primary);
+  background-color: var(--color-primary-light);
+}
+
+.catmat-score-badge {
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--color-primary);
+  background-color: var(--color-primary-light);
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  align-self: center;
+}
