@@ -419,24 +419,27 @@ $$;
 
 -- =====================================================================
 -- estoque_editar: edição direta de um produto do Estoque (nome, unidade,
--- quantidade e se está numa ATA de Registro de Preços — NÃO mexe em Ponto
--- de Pedido, que mora só na aba Demanda, ver demanda_editar_ponto_pedido
--- abaixo) — criada pra Fase 2 porque, uma vez em produção no Supabase, não
--- dá mais pra abrir a planilha e editar a célula na mão. Diferente de
--- retirar_material/registrar_entrada, esta função GRAVA o saldo diretamente
--- (não soma/subtrai) — por isso exige a mesma senha da Diretoria usada em
--- liberacao_registrar_retirada, e não deixa renomear um produto para um
--- nome que já existe em outra linha (mesma regra do índice único por nome,
--- só que com uma mensagem amigável em vez de estourar a constraint).
+-- quantidade, categoria e se está numa ATA de Registro de Preços — NÃO
+-- mexe em Ponto de Pedido, que mora só na aba Demanda, ver
+-- demanda_editar_ponto_pedido abaixo) — criada pra Fase 2 porque, uma vez
+-- em produção no Supabase, não dá mais pra abrir a planilha e editar a
+-- célula na mão. Diferente de retirar_material/registrar_entrada, esta
+-- função GRAVA o saldo diretamente (não soma/subtrai) — por isso exige a
+-- mesma senha da Diretoria usada em liberacao_registrar_retirada, e não
+-- deixa renomear um produto para um nome que já existe em outra linha
+-- (mesma regra do índice único por nome, só que com uma mensagem amigável
+-- em vez de estourar a constraint).
 -- =====================================================================
 drop function if exists estoque_editar(bigint, text, text, numeric, text);
 drop function if exists estoque_editar(bigint, text, text, numeric, numeric, text);
+drop function if exists estoque_editar(bigint, text, text, numeric, boolean, text);
 
 create or replace function estoque_editar(
   p_id bigint,
   p_produto text,
   p_un text,
   p_saldo numeric,
+  p_categoria text,
   p_ata boolean,
   p_senha text
 ) returns estoque
@@ -472,6 +475,7 @@ begin
     set produto = v_produto,
         un = nullif(trim(coalesce(p_un, '')), ''),
         saldo = p_saldo,
+        categoria = nullif(trim(coalesce(p_categoria, '')), ''),
         ata = p_ata,
         updated_at = now()
     where id = p_id
@@ -596,6 +600,6 @@ grant execute on function liberacao_avancar(text, text, jsonb) to anon, authenti
 grant execute on function liberacao_recusar(text) to anon, authenticated;
 grant execute on function liberacao_excluir(text) to anon, authenticated;
 grant execute on function liberacao_registrar_retirada(text, text, text, text, numeric) to anon, authenticated;
-grant execute on function estoque_editar(bigint, text, text, numeric, boolean, text) to anon, authenticated;
+grant execute on function estoque_editar(bigint, text, text, numeric, text, boolean, text) to anon, authenticated;
 grant execute on function demanda_editar_ponto_pedido(text, numeric, text) to anon, authenticated;
 grant execute on function demanda_editar_fornecedor(text, text, text, numeric, numeric, text, text) to anon, authenticated;

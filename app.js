@@ -280,7 +280,7 @@ async function callRetirarMaterial(items) {
  * sendo a única forma de editar essas células, como sempre foi; por isso
  * esta função não tem um caminho pelo SCRIPT_URL.
  */
-async function callEstoqueEditar({ id, produto, un, saldo, ata, senha }) {
+async function callEstoqueEditar({ id, produto, un, saldo, categoria, ata, senha }) {
   if (!USE_SUPABASE) {
     return { status: 'error', message: 'Edição de estoque só está disponível com o Supabase ativado.' };
   }
@@ -290,6 +290,7 @@ async function callEstoqueEditar({ id, produto, un, saldo, ata, senha }) {
       p_produto: produto,
       p_un: un,
       p_saldo: saldo,
+      p_categoria: categoria,
       p_ata: (ata === true || ata === false) ? ata : null,
       p_senha: senha
     }),
@@ -3009,6 +3010,7 @@ function openEditarEstoqueItemModal(item) {
   document.getElementById('editarEstoqueProduto').value = item.produto;
   document.getElementById('editarEstoqueUnidade').value = item.un || '';
   document.getElementById('editarEstoqueQuantidade').value = item.total;
+  document.getElementById('editarEstoqueCategoria').value = item.categoria || '';
   document.getElementById('editarEstoqueAta').value = item.ata === true ? 'true' : (item.ata === false ? 'false' : '');
   document.getElementById('editarEstoqueSenha').value = '';
   document.getElementById('editarEstoqueError').classList.add('hidden');
@@ -3029,6 +3031,7 @@ async function handleConfirmEditarEstoqueItem() {
   const produto = document.getElementById('editarEstoqueProduto').value.trim();
   const un = document.getElementById('editarEstoqueUnidade').value.trim();
   const quantidadeStr = document.getElementById('editarEstoqueQuantidade').value;
+  const categoria = document.getElementById('editarEstoqueCategoria').value;
   const ataStr = document.getElementById('editarEstoqueAta').value;
   const senha = document.getElementById('editarEstoqueSenha').value;
 
@@ -3057,6 +3060,7 @@ async function handleConfirmEditarEstoqueItem() {
       produto,
       un,
       saldo: Number(quantidadeStr),
+      categoria,
       ata: ataStr === '' ? null : (ataStr === 'true'),
       senha
     });
