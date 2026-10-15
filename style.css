@@ -1681,6 +1681,8 @@ tr:hover td { background-color: var(--bg-primary); }
   width: 100%;
   max-width: 380px;
   margin: 1rem;
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
 }
 
 .modal-card--wide {
@@ -2287,6 +2289,98 @@ tr:hover td { background-color: var(--bg-primary); }
   color: #047857;
 }
 
+/* Mesmo botão-link acima, mas tom de aviso/perigo — usado pra "Sem
+   correspondência" na fila de revisão do Mapeamento CATMAT. */
+.btn-link-danger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--color-danger);
+  font-weight: 700;
+  font-size: inherit;
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  transition: var(--transition);
+}
+
+.btn-link-danger:hover {
+  color: #b91c1c;
+}
+
+.catmat-info-box {
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  background: var(--bg-primary);
+  font-size: 0.8125rem;
+  overflow-wrap: break-word;
+}
+
+.catmat-info-loading,
+.catmat-info-empty {
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.catmat-info-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.catmat-info-status {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+}
+
+.catmat-info-status--aprovado {
+  color: var(--color-success);
+  background: var(--color-success-light);
+}
+
+.catmat-info-status--pendente {
+  color: var(--color-warning);
+  background: var(--color-warning-light);
+}
+
+.catmat-info-status--sem_correspondencia {
+  color: var(--color-danger);
+  background: var(--color-danger-light);
+}
+
+.catmat-info-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.catmat-info-rows div {
+  color: var(--text-secondary);
+}
+
+.catmat-info-rows strong {
+  color: var(--text-primary);
+}
+
+.catmat-info-desc {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  margin: 0 0 0.5rem;
+}
+
 .kanban-card-title {
   font-size: 0.875rem;
   font-weight: 700;
@@ -2463,6 +2557,11 @@ tr:hover td { background-color: var(--bg-primary); }
 
 .pedido-obtencao-item-row.pedido-obtencao-item-row--disabled input[type="checkbox"] {
   cursor: not-allowed;
+}
+
+.pedido-obtencao-item-row.catmat-revisao-lote-row--revisado {
+  border-color: var(--color-success);
+  background-color: var(--color-success-light);
 }
 
 .pedido-obtencao-item-name {

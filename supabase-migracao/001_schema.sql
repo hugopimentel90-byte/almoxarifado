@@ -19,6 +19,12 @@ create table if not exists estoque (
   -- e usado como filtro na tela Ponto de Compra (coluna adicionada depois
   -- da Fase 2, ver estoque_editar em 003_funcoes.sql).
   ata boolean,
+  -- Preço unitário registrado na ATA, quando o item estiver coberto por
+  -- uma. Pode ser preenchido pra qualquer item (independente do valor de
+  -- `ata` acima) — editável pelo mesmo lápis da Consulta de Estoque
+  -- (coluna adicionada depois da Fase 2, ver estoque_editar em
+  -- 003_funcoes.sql e 006_preco_ata.sql).
+  preco_ata numeric,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

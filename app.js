@@ -111,6 +111,8 @@ function mapEstoqueRowToItem(row) {
     codigoBarras: row.codigo_barras || '',
     // true | false | null (null = ainda não informado)
     ata: row.ata === true || row.ata === false ? row.ata : null,
+    // Preço unitário da ATA — independente do campo `ata` acima, pode estar preenchido pra qualquer item
+    precoAta: (row.preco_ata !== null && row.preco_ata !== undefined) ? Number(row.preco_ata) : null,
     total: Number(row.saldo) || 0
   };
 }
@@ -280,7 +282,7 @@ async function callRetirarMaterial(items) {
  * sendo a única forma de editar essas células, como sempre foi; por isso
  * esta função não tem um caminho pelo SCRIPT_URL.
  */
-async function callEstoqueEditar({ id, produto, un, saldo, categoria, ata, senha }) {
+async function callEstoqueEditar({ id, produto, un, saldo, categoria, ata, precoAta, senha }) {
   if (!USE_SUPABASE) {
     return { status: 'error', message: 'Edição de estoque só está disponível com o Supabase ativado.' };
   }
@@ -292,6 +294,7 @@ async function callEstoqueEditar({ id, produto, un, saldo, categoria, ata, senha
       p_saldo: saldo,
       p_categoria: categoria,
       p_ata: (ata === true || ata === false) ? ata : null,
+      p_preco_ata: (precoAta === null || precoAta === undefined || precoAta === '') ? null : Number(precoAta),
       p_senha: senha
     }),
     data => ({ item: mapEstoqueRowToItem(data) })
@@ -783,9 +786,9 @@ async function fetchDashboardData() {
 
 function switchTab(tabName) {
   // Reforço de segurança: visitante não tem acesso às abas de Retirada e Entrada,
-  // nem à de Ponto de Pedido (só o perfil administrador), mesmo que algo
-  // tente disparar switchTab diretamente para elas.
-  if (currentUserRole === 'visitante' && (tabName === 'retirada' || tabName === 'entrada' || tabName === 'pontopedido')) {
+  // nem à de Ponto de Pedido/Mapeamento CATMAT (só o perfil administrador), mesmo
+  // que algo tente disparar switchTab diretamente para elas.
+  if (currentUserRole === 'visitante' && (tabName === 'retirada' || tabName === 'entrada' || tabName === 'pontopedido' || tabName === 'catmatmapeamento')) {
     tabName = 'dashboard';
   }
 
@@ -795,12 +798,14 @@ function switchTab(tabName) {
   const menuEstoque = document.getElementById('menuEstoque');
   const menuLiberacao = document.getElementById('menuLiberacao');
   const menuPontoPedido = document.getElementById('menuPontoPedido');
+  const menuCatmatMapeamento = document.getElementById('menuCatmatMapeamento');
   const viewDashboard = document.getElementById('viewDashboard');
   const viewRetirada = document.getElementById('viewRetirada');
   const viewEntrada = document.getElementById('viewEntrada');
   const viewEstoque = document.getElementById('viewEstoque');
   const viewLiberacao = document.getElementById('viewLiberacao');
   const viewPontoPedido = document.getElementById('viewPontoPedido');
+  const viewCatmatMapeamento = document.getElementById('viewCatmatMapeamento');
 
   menuDashboard.classList.remove('active');
   menuRetirada.classList.remove('active');
@@ -808,12 +813,14 @@ function switchTab(tabName) {
   menuEstoque.classList.remove('active');
   menuLiberacao.classList.remove('active');
   menuPontoPedido.classList.remove('active');
+  menuCatmatMapeamento.classList.remove('active');
   viewDashboard.classList.add('hidden');
   viewRetirada.classList.add('hidden');
   viewEntrada.classList.add('hidden');
   viewEstoque.classList.add('hidden');
   viewLiberacao.classList.add('hidden');
   viewPontoPedido.classList.add('hidden');
+  viewCatmatMapeamento.classList.add('hidden');
 
   if (tabName === 'dashboard') {
     menuDashboard.classList.add('active');
@@ -844,6 +851,11 @@ function switchTab(tabName) {
     menuPontoPedido.classList.add('active');
     viewPontoPedido.classList.remove('hidden');
     carregarPontoPedidoDados();
+  } else if (tabName === 'catmatmapeamento') {
+    menuCatmatMapeamento.classList.add('active');
+    viewCatmatMapeamento.classList.remove('hidden');
+    stockLevelsFetchPromise = fetchStockLevels();
+    carregarFilaRevisaoCatmat();
   }
 }
 
@@ -3012,14 +3024,81 @@ function openEditarEstoqueItemModal(item) {
   document.getElementById('editarEstoqueQuantidade').value = item.total;
   document.getElementById('editarEstoqueCategoria').value = item.categoria || '';
   document.getElementById('editarEstoqueAta').value = item.ata === true ? 'true' : (item.ata === false ? 'false' : '');
+  document.getElementById('editarEstoquePrecoAta').value = (item.precoAta !== null && item.precoAta !== undefined) ? item.precoAta : '';
   document.getElementById('editarEstoqueSenha').value = '';
   document.getElementById('editarEstoqueError').classList.add('hidden');
   document.getElementById('editarEstoqueItemModal').classList.remove('hidden');
+  carregarEditarEstoqueCatmatInfo();
 }
 
 function closeEditarEstoqueItemModal() {
   document.getElementById('editarEstoqueItemModal').classList.add('hidden');
   editarEstoqueItemAtual = null;
+}
+
+/** Senha da Diretoria já digitada no próprio modal "Editar Produto" — reaproveitada pelo "Trocar" do box de CATMAT, sem pedir de novo. */
+function obterSenhaEditarEstoqueSessao() {
+  const senha = document.getElementById('editarEstoqueSenha').value;
+  if (!senha) {
+    showToast("Informe a senha da Diretoria para trocar o CATMAT.", "warning");
+    return null;
+  }
+  return senha;
+}
+
+const CATMAT_STATUS_LABEL = { aprovado: 'Aprovado', pendente: 'Pendente', sem_correspondencia: 'Sem correspondência' };
+
+/** Busca (de novo, do banco) e redesenha o box de Grupo/Classe/PDM/CATMAT/Descrição do item sendo editado. */
+async function carregarEditarEstoqueCatmatInfo() {
+  const item = editarEstoqueItemAtual;
+  const box = document.getElementById('editarEstoqueCatmatInfo');
+  if (!item || !box) return;
+
+  box.innerHTML = '<p class="catmat-info-loading">Carregando...</p>';
+  try {
+    const linha = await buscarCatmatMapeamentoPorEstoqueId(item.id);
+    renderEditarEstoqueCatmatInfo(item, linha);
+  } catch (error) {
+    console.error("Erro ao buscar mapeamento CATMAT do item:", error);
+    box.innerHTML = `<p class="catmat-info-empty">Erro ao buscar informações de CATMAT: ${error.message}</p>`;
+  }
+}
+
+function renderEditarEstoqueCatmatInfo(item, linha) {
+  const box = document.getElementById('editarEstoqueCatmatInfo');
+  const abrirTrocar = () => abrirTrocarCatmatModal(
+    { estoqueId: item.id, produto: item.produto },
+    { obterSenha: obterSenhaEditarEstoqueSessao, aoConcluir: carregarEditarEstoqueCatmatInfo }
+  );
+
+  if (!linha) {
+    box.innerHTML = `
+      <p class="catmat-info-empty">Nenhuma informação de CATMAT vinculada a este item ainda.</p>
+      <button type="button" class="btn-link-warning" id="btnTrocarCatmatEstoque">✎ Buscar CATMAT</button>
+    `;
+    box.querySelector('#btnTrocarCatmatEstoque').addEventListener('click', abrirTrocar);
+    return;
+  }
+
+  const statusLabel = CATMAT_STATUS_LABEL[linha.status] || linha.status;
+  const info = linha.codigoItem ? `
+    <div class="catmat-info-rows">
+      <div><strong>CATMAT:</strong> ${linha.codigoItem}</div>
+      <div><strong>Grupo:</strong> ${linha.nomeGrupo || '—'} (${linha.codigoGrupo ?? '—'})</div>
+      <div><strong>Classe:</strong> ${linha.nomeClasse || '—'} (${linha.codigoClasse ?? '—'})</div>
+      <div><strong>PDM:</strong> ${linha.nomePdm || '—'} (${linha.codigoPdm ?? '—'})</div>
+    </div>
+    <p class="catmat-info-desc">${linha.descricaoItem || ''}</p>
+  ` : `<p class="catmat-info-empty">Sem correspondência encontrada no catálogo do CATMAT.</p>`;
+
+  box.innerHTML = `
+    <div class="catmat-info-header">
+      <span class="catmat-info-status catmat-info-status--${linha.status}">${statusLabel}</span>
+      <button type="button" class="btn-link-warning" id="btnTrocarCatmatEstoque">✎ Trocar</button>
+    </div>
+    ${info}
+  `;
+  box.querySelector('#btnTrocarCatmatEstoque').addEventListener('click', abrirTrocar);
 }
 
 async function handleConfirmEditarEstoqueItem() {
@@ -3033,6 +3112,7 @@ async function handleConfirmEditarEstoqueItem() {
   const quantidadeStr = document.getElementById('editarEstoqueQuantidade').value;
   const categoria = document.getElementById('editarEstoqueCategoria').value;
   const ataStr = document.getElementById('editarEstoqueAta').value;
+  const precoAtaStr = document.getElementById('editarEstoquePrecoAta').value;
   const senha = document.getElementById('editarEstoqueSenha').value;
 
   if (!produto) {
@@ -3042,6 +3122,11 @@ async function handleConfirmEditarEstoqueItem() {
   }
   if (quantidadeStr === '' || Number(quantidadeStr) < 0) {
     errorEl.textContent = 'Informe uma quantidade válida (zero ou mais).';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  if (precoAtaStr !== '' && Number(precoAtaStr) < 0) {
+    errorEl.textContent = 'O preço de ATA não pode ser negativo.';
     errorEl.classList.remove('hidden');
     return;
   }
@@ -3062,6 +3147,7 @@ async function handleConfirmEditarEstoqueItem() {
       saldo: Number(quantidadeStr),
       categoria,
       ata: ataStr === '' ? null : (ataStr === 'true'),
+      precoAta: precoAtaStr === '' ? null : Number(precoAtaStr),
       senha
     });
 
@@ -3094,8 +3180,13 @@ function initializePontoPedidoModule() {
   document.getElementById('btnGerarPontoCompra').addEventListener('click', handleGerarPontoCompra);
   document.getElementById('btnCancelarPontoCompraSelecionavel').addEventListener('click', handleCancelarPontoCompraSelecionavel);
   document.getElementById('btnSeguintePontoCompraSelecionavel').addEventListener('click', handleSeguintePontoCompraSelecionavel);
+  document.getElementById('btnCancelarPontoCompraFinalizar').addEventListener('click', handleCancelarPontoCompraFinalizar);
+  document.getElementById('btnBaixarManifestacaoInteresse').addEventListener('click', handleBaixarManifestacaoInteresse);
+  document.getElementById('btnBaixarApendiceII').addEventListener('click', handleBaixarApendiceIIXlsx);
 
-  document.getElementById('btnAbrirPedidoObtencao').addEventListener('click', abrirPedidoObtencaoModal);
+  document.getElementById('btnAbrirListaPropriaAta').addEventListener('click', abrirListaPropriaAtaModal);
+  document.getElementById('btnCancelarListaPropriaAta').addEventListener('click', fecharListaPropriaAtaModal);
+  document.getElementById('btnExtrairListaPropriaAta').addEventListener('click', handleExtrairListaPropriaAta);
   document.getElementById('btnCancelPedidoObtencao').addEventListener('click', fecharPedidoObtencaoModal);
   document.getElementById('pedidoObtencaoModal').addEventListener('click', (e) => {
     if (e.target.id === 'pedidoObtencaoModal') {
@@ -3103,6 +3194,7 @@ function initializePontoPedidoModule() {
     }
   });
   document.getElementById('btnBaixarPedidoObtencaoPDF').addEventListener('click', handleBaixarPedidoObtencaoPDF);
+  document.getElementById('btnBaixarPedidoObtencaoDocx').addEventListener('click', handleBaixarPedidoObtencaoDocx);
   document.getElementById('btnEnviarPedidoObtencaoEmail').addEventListener('click', handleEnviarPedidoObtencaoEmail);
 
   document.getElementById('btnCancelEditarPontoPedido').addEventListener('click', closeEditarPontoPedidoModal);
@@ -3303,11 +3395,11 @@ function handleGerarPontoCompra() {
     return;
   }
 
-  const { ata } = lerFiltrosPontoCompra();
+  const { categoria, ata } = lerFiltrosPontoCompra();
   if (ata === 'sim') {
-    abrirPedidoObtencaoModalComItens(items);
+    abrirPedidoObtencaoModalComItens(items, { usarDescricaoCatmat: true });
   } else {
-    iniciarFluxoCatmat(items);
+    iniciarFluxoCatmat(items, categoria);
   }
 }
 
@@ -3503,29 +3595,227 @@ async function callDemandaEditarFornecedor({ material, descricaoFornecedor, unid
   );
 }
 
-// --- Estado e telas do fluxo (lista selecionável -> casamento por item) ---
+// --- Etapa A: revisão em lote (Descrição/CATMAT já vêm do Mapeamento CATMAT) ---
+//
+// Antes, o GERAR com ATA=Não buscava a família CATMAT (PDM) e o item de
+// cada produto um por um, do zero. Agora que o Mapeamento CATMAT
+// (estoque_catmat_mapeamento) já cobre quase todo o Estoque, esse
+// casamento é só carregado de uma vez pra toda a lista — só quando a
+// sugestão salva estiver errada é que se usa o "Trocar" (reaproveita o
+// MESMO modal de 2 etapas — PDM -> Item — já construído pro lápis
+// "Editar Produto" do Estoque, abrirTrocarCatmatModal).
 
-let catmatFlowItens = [];        // [{produto, estoqueAtual, pontoPedido, un}]
+let catmatFlowItens = [];        // [{estoqueId, produto, estoqueAtual, pontoPedido, un}]
 let catmatFlowSelecionados = []; // paralelo a catmatFlowItens: boolean
+let catmatFlowMapeamento = [];   // paralelo a catmatFlowItens: linha de estoque_catmat_mapeamento | null
+let catmatFlowRevisado = [];     // paralelo a catmatFlowItens: boolean (só visual — Manter/Trocar já usado)
+
+// --- Etapa B: Pesquisa de Preços (até 3) + Unidade/Quantidades, item por item ---
+
 let catmatFlowIndex = 0;
-let catmatFlowResultados = [];   // paralelo aos itens selecionados: null (pulado) ou {descricaoFornecedor, unidade, quantidade, valorUnitario, catmat}
-let catmatFlowEtapa = 'pdm';     // 'pdm' | 'item' | 'preco' | 'final'
-let catmatFlowPdmEscolhido = null;
-let catmatFlowItensCatmat = [];
-let catmatFlowItemEscolhido = null;
-let catmatFlowPrecoEscolhido = null;
+let catmatFlowResultados = [];        // paralelo aos itens selecionados: null (pulado) ou {codigoItem, descricaoItem, unidade, qtdMinima, qtdMaxima, qtdTotal}
+let catmatFlowPrecosDisponiveis = []; // compras devolvidas pela Pesquisa de Preços do item atual
+let catmatFlowPrecosMarcados = [];    // índices (em catmatFlowPrecosDisponiveis) marcados, no máximo 3
+
+// --- Etapa C: cabeçalho + download da Manifestação de Interesse (.docx) ---
+
+let catmatFlowItensFinais = []; // itens resolvidos na Etapa B, prontos pra entrar no docx
+let catmatFlowCategoria = ''; // categoria do filtro usado no GERAR — decide se os 4 documentos fixos aparecem na Etapa C
 
 function mostrarPontoCompraScreen(screen) {
   document.getElementById('pontoCompraFiltrosSection').classList.toggle('hidden', screen !== 'filtros');
   document.getElementById('pontoCompraSelecionavelSection').classList.toggle('hidden', screen !== 'selecionavel');
   document.getElementById('pontoCompraCasamentoSection').classList.toggle('hidden', screen !== 'casamento');
+  document.getElementById('pontoCompraFinalizarSection').classList.toggle('hidden', screen !== 'finalizar');
 }
 
-function iniciarFluxoCatmat(items) {
-  catmatFlowItens = items.map(item => ({ produto: item.produto, estoqueAtual: item.total, pontoPedido: item.pontoPedido, un: item.un }));
+/** Senha digitada no topo da Etapa A — reaproveitada no Trocar e ao salvar os preços da Etapa B, sem pedir de novo por item. */
+function obterSenhaPontoCompraSessao() {
+  const senha = document.getElementById('pontoCompraSenha').value;
+  if (!senha) {
+    showToast("Informe a senha da Diretoria no topo da tela primeiro.", "warning");
+    return null;
+  }
+  return senha;
+}
+
+// =====================================================================
+// "Gerar lista própria para ATA" — ponto de entrada alternativo ao GERAR
+// normal: em vez de filtrar o Estoque por Ponto de Pedido, o usuário sobe
+// um PDF simples (uma coluna "Item", um produto por linha — mesma lógica
+// de agrupar texto por linha visual já usada em
+// extractProductQuantityFromPdf, pro PIM) com a lista exata de produtos
+// que ele quer nessa ATA. Cada linha extraída é casada com o produto mais
+// parecido do Estoque DENTRO da categoria escolhida (mesmo algoritmo de
+// pontuação por palavra de referência usado em todo canto do Ponto de
+// Compra) — os itens encontrados entram no EXATO MESMO fluxo de sempre
+// (iniciarFluxoCatmat: revisão Manter/Trocar -> preço -> documentos).
+// =====================================================================
+
+function abrirListaPropriaAtaModal() {
+  document.getElementById('listaPropriaAtaCategoria').value = '';
+  document.getElementById('listaPropriaAtaArquivo').value = '';
+  document.getElementById('listaPropriaAtaError').classList.add('hidden');
+  document.getElementById('listaPropriaAtaModal').classList.remove('hidden');
+}
+
+function fecharListaPropriaAtaModal() {
+  document.getElementById('listaPropriaAtaModal').classList.add('hidden');
+}
+
+/**
+ * Extrai uma lista simples de itens de um PDF (uma coluna "Item", uma
+ * linha por produto) — reaproveita o agrupamento de texto por linha
+ * visual (posição Y) de extractProductQuantityFromPdf, só que aqui cada
+ * linha não vazia já é um item (sem colunas de quantidade/situação pra
+ * separar). Descarta uma eventual linha de cabeçalho ("ITEM"/"ITENS").
+ */
+async function extractSimpleItemListFromPdf(file) {
+  if (!window.pdfjsLib) return [];
+  if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+  const rawItems = [];
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    const page = await pdf.getPage(pageNum);
+    const textContent = await page.getTextContent();
+    textContent.items.forEach(item => {
+      const str = (item.str || '').trim();
+      if (!str) return;
+      rawItems.push({ str, x: item.transform[4], y: item.transform[5] });
+    });
+  }
+
+  const lineTolerance = 3;
+  const lines = [];
+  rawItems
+    .sort((a, b) => b.y - a.y || a.x - b.x)
+    .forEach(item => {
+      let line = lines.find(l => Math.abs(l.y - item.y) <= lineTolerance);
+      if (!line) { line = { y: item.y, items: [] }; lines.push(line); }
+      line.items.push(item);
+    });
+
+  const HEADER_REGEX = /^itens?$/i;
+  return lines
+    .map(line => {
+      line.items.sort((a, b) => a.x - b.x);
+      return line.items.map(i => i.str).join(' ').replace(/\s+/g, ' ').trim();
+    })
+    .filter(texto => texto && !HEADER_REGEX.test(texto));
+}
+
+/** Melhor produto do Estoque (dentro de `candidatos`) parecido com `texto`, ou null se nenhum passar no filtro de palavra de referência. */
+function encontrarMelhorItemEstoque(texto, candidatos) {
+  const referencia = extrairPalavrasReferencia(texto);
+  const filtrados = filtrarPorPalavrasReferencia(candidatos, c => c.produto, referencia);
+  if (filtrados.length === 0) return null;
+
+  const tokens = tokensSignificativos(texto);
+  let melhor = null;
+  let melhorScore = -1;
+  filtrados.forEach(c => {
+    const score = pontuarSemelhancaTexto(tokens, c.produto);
+    if (score > melhorScore) {
+      melhorScore = score;
+      melhor = c;
+    }
+  });
+  return melhor;
+}
+
+async function handleExtrairListaPropriaAta() {
+  const errorEl = document.getElementById('listaPropriaAtaError');
+  errorEl.classList.add('hidden');
+
+  const categoria = document.getElementById('listaPropriaAtaCategoria').value;
+  const arquivo = document.getElementById('listaPropriaAtaArquivo').files[0];
+
+  if (!categoria) {
+    errorEl.textContent = 'Selecione a categoria.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  if (!arquivo) {
+    errorEl.textContent = 'Selecione o arquivo PDF.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  const btn = document.getElementById('btnExtrairListaPropriaAta');
+  setButtonProcessing(btn, 'Extraindo...');
+  try {
+    if (stockLevelsFetchPromise) await stockLevelsFetchPromise;
+
+    const linhas = await extractSimpleItemListFromPdf(arquivo);
+    if (linhas.length === 0) {
+      errorEl.textContent = 'Não foi possível extrair nenhum item desse PDF.';
+      errorEl.classList.remove('hidden');
+      return;
+    }
+
+    const candidatos = stockData.filter(item => getCategoryForProduct(item.produto).toLowerCase() === categoria.toLowerCase());
+    const encontrados = [];
+    const naoEncontrados = [];
+    linhas.forEach(linha => {
+      const melhor = encontrarMelhorItemEstoque(linha, candidatos);
+      if (!melhor) {
+        naoEncontrados.push(linha);
+        return;
+      }
+      if (!encontrados.some(e => e.id === melhor.id)) {
+        encontrados.push(melhor);
+      }
+    });
+
+    // Itens sem correspondência no Estoque entram na lista do mesmo jeito
+    // (como "item novo", sem estoque_id) — assim dá pra ao menos buscar uma
+    // classificação parecida no catálogo do CATMAT via "Trocar", mesmo sem
+    // o produto existir no Almoxarifado ainda.
+    const itensNovos = naoEncontrados.map(linha => ({ id: null, produto: linha, total: null, pontoPedido: null, un: '' }));
+    const todosItens = [...encontrados, ...itensNovos];
+
+    fecharListaPropriaAtaModal();
+    if (naoEncontrados.length > 0) {
+      showToast(`${encontrados.length} de ${linhas.length} itens do PDF encontrados no Estoque — ${naoEncontrados.length} sem correspondência entraram na lista como item novo.`, "warning");
+    } else {
+      showToast(`${encontrados.length} itens do PDF encontrados no Estoque.`, "success");
+    }
+    iniciarFluxoCatmat(todosItens, categoria);
+  } catch (error) {
+    console.error("Erro ao extrair a lista própria para ATA:", error);
+    errorEl.textContent = 'Erro ao processar o PDF. Tente novamente.';
+    errorEl.classList.remove('hidden');
+  } finally {
+    clearButtonProcessing(btn);
+  }
+}
+
+async function iniciarFluxoCatmat(items, categoria) {
+  catmatFlowItens = items.map(item => ({ estoqueId: item.id, produto: item.produto, estoqueAtual: item.total, pontoPedido: item.pontoPedido, un: item.un }));
   catmatFlowSelecionados = catmatFlowItens.map(() => true);
-  renderPontoCompraSelecionavelLista();
+  catmatFlowRevisado = catmatFlowItens.map(() => false);
+  catmatFlowMapeamento = catmatFlowItens.map(() => null);
+  catmatFlowCategoria = categoria;
+
   mostrarPontoCompraScreen('selecionavel');
+  document.getElementById('pontoCompraSenha').value = '';
+  document.getElementById('pontoCompraSelecionavelLista').innerHTML = '<p style="color: var(--text-secondary);">Carregando descrição/CATMAT de cada item...</p>';
+
+  try {
+    const mapeamentoCompleto = await carregarMapeamentoCatmatCompleto();
+    const porEstoqueId = new Map(mapeamentoCompleto.map(m => [m.estoqueId, m]));
+    catmatFlowMapeamento = catmatFlowItens.map(item => porEstoqueId.get(item.estoqueId) || null);
+  } catch (error) {
+    console.error("Erro ao buscar o Mapeamento CATMAT:", error);
+    showToast("Não foi possível carregar o Mapeamento CATMAT — revise manualmente com o Trocar.", "warning");
+  }
+
+  renderPontoCompraSelecionavelLista();
 }
 
 function renderPontoCompraSelecionavelLista() {
@@ -3533,8 +3823,13 @@ function renderPontoCompraSelecionavelLista() {
   container.innerHTML = '';
 
   catmatFlowItens.forEach((item, index) => {
+    const mapeamento = catmatFlowMapeamento[index];
+    const temCorrespondencia = mapeamento && mapeamento.codigoItem && mapeamento.status !== 'sem_correspondencia';
+    const itemNovo = !item.estoqueId; // veio de "Gerar lista própria para ATA" sem achar nada parecido no Estoque
+
     const row = document.createElement('div');
     row.className = 'pedido-obtencao-item-row';
+    if (catmatFlowRevisado[index]) row.classList.add('catmat-revisao-lote-row--revisado');
 
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
@@ -3545,12 +3840,68 @@ function renderPontoCompraSelecionavelLista() {
     row.appendChild(checkbox);
 
     const info = document.createElement('div');
+    info.style.flex = '1';
     info.innerHTML = `
-      <div class="pedido-obtencao-item-name">${item.produto}</div>
-      <div class="pedido-obtencao-item-meta">Estoque atual: ${formatDataLabelValue(item.estoqueAtual)}${item.pontoPedido ? ` · Ponto de Pedido: ${formatDataLabelValue(item.pontoPedido)}` : ''}</div>
+      <div class="pedido-obtencao-item-name">${item.produto}${itemNovo ? ' <span class="badge badge-pending" style="margin-left: 0.4rem;">item novo — fora do Estoque</span>' : ''}</div>
+      <div class="pedido-obtencao-item-meta">
+        ${temCorrespondencia
+          ? `CATMAT ${mapeamento.codigoItem} — ${mapeamento.descricaoItem}`
+          : '<span style="color: var(--color-danger);">— sem correspondência no Mapeamento CATMAT —</span>'}
+      </div>
     `;
     row.appendChild(info);
 
+    const acoes = document.createElement('div');
+    acoes.style.cssText = 'display: flex; gap: 0.5rem; white-space: nowrap; align-items: center;';
+
+    if (!itemNovo) {
+      const btnManter = document.createElement('button');
+      btnManter.type = 'button';
+      btnManter.className = 'btn-link-success';
+      btnManter.textContent = '✓ Manter';
+      btnManter.addEventListener('click', () => {
+        catmatFlowRevisado[index] = true;
+        renderPontoCompraSelecionavelLista();
+      });
+      acoes.appendChild(btnManter);
+    }
+
+    const btnTrocar = document.createElement('button');
+    btnTrocar.type = 'button';
+    btnTrocar.className = 'btn-link-warning';
+    btnTrocar.textContent = '✎ Trocar';
+    btnTrocar.addEventListener('click', () => {
+      if (itemNovo) {
+        // Sem estoque_id — a escolha feita no Trocar fica só na memória do
+        // fluxo (não tenta gravar em catmat_mapeamento_salvar).
+        abrirTrocarCatmatModal(
+          { estoqueId: null, produto: item.produto },
+          {
+            salvarLocal: true,
+            aoConcluir: (escolhido) => {
+              catmatFlowMapeamento[index] = escolhido;
+              catmatFlowRevisado[index] = true;
+              renderPontoCompraSelecionavelLista();
+            }
+          }
+        );
+        return;
+      }
+      abrirTrocarCatmatModal(
+        { estoqueId: item.estoqueId, produto: item.produto },
+        {
+          obterSenha: obterSenhaPontoCompraSessao,
+          aoConcluir: async () => {
+            catmatFlowMapeamento[index] = await buscarCatmatMapeamentoPorEstoqueId(item.estoqueId);
+            catmatFlowRevisado[index] = true;
+            renderPontoCompraSelecionavelLista();
+          }
+        }
+      );
+    });
+    acoes.appendChild(btnTrocar);
+
+    row.appendChild(acoes);
     container.appendChild(row);
   });
 }
@@ -3560,155 +3911,54 @@ function handleCancelarPontoCompraSelecionavel() {
 }
 
 function handleSeguintePontoCompraSelecionavel() {
-  const selecionados = catmatFlowItens.filter((_, idx) => catmatFlowSelecionados[idx]);
-  if (selecionados.length === 0) {
+  const indices = catmatFlowItens.map((_, idx) => idx).filter(idx => catmatFlowSelecionados[idx]);
+  if (indices.length === 0) {
     showToast("Selecione pelo menos um item.", "warning");
     return;
   }
-  catmatFlowItens = selecionados;
-  catmatFlowResultados = selecionados.map(() => null);
+  catmatFlowItens = indices.map(idx => catmatFlowItens[idx]);
+  catmatFlowMapeamento = indices.map(idx => catmatFlowMapeamento[idx]);
+  catmatFlowResultados = catmatFlowItens.map(() => null);
   catmatFlowIndex = 0;
   mostrarPontoCompraScreen('casamento');
-  iniciarEtapaPdmDoItemAtual();
+  iniciarEtapaPrecoDoItemAtual();
 }
 
 function itemAtualDoFluxoCatmat() {
   return catmatFlowItens[catmatFlowIndex];
 }
 
-async function iniciarEtapaPdmDoItemAtual() {
-  catmatFlowEtapa = 'pdm';
-  catmatFlowPdmEscolhido = null;
-  catmatFlowItensCatmat = [];
-  catmatFlowItemEscolhido = null;
-  catmatFlowPrecoEscolhido = null;
-
-  const item = itemAtualDoFluxoCatmat();
-  atualizarTituloCasamentoCatmat();
-
-  const conteudo = document.getElementById('pontoCompraCasamentoConteudo');
-  conteudo.innerHTML = '<p style="color: var(--text-secondary);">Buscando materiais parecidos no catálogo do CATMAT...</p>';
-
-  try {
-    const candidatos = await buscarPdmsParecidos(item.produto);
-    renderCatmatEtapaPdm(candidatos);
-  } catch (error) {
-    console.error("Erro ao buscar PDMs do CATMAT:", error);
-    conteudo.innerHTML = `<p style="color: var(--color-danger);">Erro ao consultar o catálogo do CATMAT: ${error.message}</p>`;
-    renderCatmatBotoesNavegacao({ permitirPular: true });
-  }
+function mapeamentoAtualDoFluxoCatmat() {
+  return catmatFlowMapeamento[catmatFlowIndex];
 }
 
 function atualizarTituloCasamentoCatmat() {
   const item = itemAtualDoFluxoCatmat();
-  const titulo = document.getElementById('pontoCompraCasamentoTitulo');
-  titulo.textContent = `Item ${catmatFlowIndex + 1} de ${catmatFlowItens.length} — ${item.produto}`;
+  document.getElementById('pontoCompraCasamentoTitulo').textContent = `Item ${catmatFlowIndex + 1} de ${catmatFlowItens.length} — ${item.produto}`;
 }
 
-function renderCatmatEtapaPdm(candidatos) {
+async function iniciarEtapaPrecoDoItemAtual() {
+  catmatFlowPrecosDisponiveis = [];
+  catmatFlowPrecosMarcados = [];
+  atualizarTituloCasamentoCatmat();
+
+  const mapeamento = mapeamentoAtualDoFluxoCatmat();
   const conteudo = document.getElementById('pontoCompraCasamentoConteudo');
-  conteudo.innerHTML = '';
 
-  const intro = document.createElement('p');
-  intro.style.cssText = 'color: var(--text-secondary); margin-bottom: 1rem;';
-  intro.textContent = 'Escolha a família de material (PDM) mais parecida com o produto:';
-  conteudo.appendChild(intro);
-
-  const lista = document.createElement('div');
-  lista.className = 'liberacao-items-list';
-  lista.style.maxHeight = '320px';
-
-  if (candidatos.length === 0) {
-    lista.innerHTML = '<p style="color: var(--text-secondary);">Nenhuma família de material parecida foi encontrada — pule este item ou tente renomear o produto no Estoque pra algo mais parecido com um nome de catálogo.</p>';
-  } else {
-    candidatos.forEach(pdm => {
-      const row = document.createElement('div');
-      row.className = 'pedido-obtencao-item-row catmat-candidato-row';
-      row.innerHTML = `
-        <div style="flex: 1;">
-          <div class="pedido-obtencao-item-name">${pdm.nomePdm}</div>
-          <div class="pedido-obtencao-item-meta">${pdm.nomeGrupo || ''}${pdm.nomeClasse ? ' › ' + pdm.nomeClasse : ''}</div>
-        </div>
-        <span class="catmat-score-badge">${Math.round(pdm.score * 100)}%</span>
-      `;
-      row.addEventListener('click', () => handleEscolherPdm(pdm));
-      lista.appendChild(row);
-    });
+  if (!mapeamento || !mapeamento.codigoItem) {
+    renderCatmatEtapaPreco([]);
+    return;
   }
 
-  conteudo.appendChild(lista);
-  renderCatmatBotoesNavegacao({ permitirPular: true });
-}
-
-async function handleEscolherPdm(pdm) {
-  catmatFlowPdmEscolhido = pdm;
-  catmatFlowEtapa = 'item';
-
-  const conteudo = document.getElementById('pontoCompraCasamentoConteudo');
-  conteudo.innerHTML = '<p style="color: var(--text-secondary);">Buscando itens dessa família no catálogo...</p>';
-
-  try {
-    const itensDoPdm = await buscarItensCatmatDoPdm(pdm.codigoPdm);
-    catmatFlowItensCatmat = itensDoPdm;
-    const item = itemAtualDoFluxoCatmat();
-    const candidatos = buscarItensParecidosNoPdm(item.produto, itensDoPdm);
-    renderCatmatEtapaItem(candidatos);
-  } catch (error) {
-    console.error("Erro ao buscar itens do CATMAT:", error);
-    conteudo.innerHTML = `<p style="color: var(--color-danger);">Erro ao consultar os itens dessa família: ${error.message}</p>`;
-    renderCatmatBotoesNavegacao({ permitirVoltar: true, permitirPular: true });
-  }
-}
-
-function renderCatmatEtapaItem(candidatos) {
-  const conteudo = document.getElementById('pontoCompraCasamentoConteudo');
-  conteudo.innerHTML = '';
-
-  const intro = document.createElement('p');
-  intro.style.cssText = 'color: var(--text-secondary); margin-bottom: 1rem;';
-  intro.textContent = `Família escolhida: ${catmatFlowPdmEscolhido.nomePdm}. Agora escolha o item mais parecido:`;
-  conteudo.appendChild(intro);
-
-  const lista = document.createElement('div');
-  lista.className = 'liberacao-items-list';
-  lista.style.maxHeight = '320px';
-
-  if (candidatos.length === 0) {
-    lista.innerHTML = '<p style="color: var(--text-secondary);">Nenhum item foi encontrado nessa família.</p>';
-  } else {
-    candidatos.forEach(it => {
-      const row = document.createElement('div');
-      row.className = 'pedido-obtencao-item-row catmat-candidato-row';
-      row.innerHTML = `
-        <div style="flex: 1;">
-          <div class="pedido-obtencao-item-name">${it.descricaoItem}</div>
-          <div class="pedido-obtencao-item-meta">CATMAT ${it.codigoItem}</div>
-        </div>
-        <span class="catmat-score-badge">${Math.round(it.score * 100)}%</span>
-      `;
-      row.addEventListener('click', () => handleEscolherItemCatmat(it));
-      lista.appendChild(row);
-    });
-  }
-
-  conteudo.appendChild(lista);
-  renderCatmatBotoesNavegacao({ permitirVoltar: true, permitirPular: true });
-}
-
-async function handleEscolherItemCatmat(it) {
-  catmatFlowItemEscolhido = it;
-  catmatFlowEtapa = 'preco';
-
-  const conteudo = document.getElementById('pontoCompraCasamentoConteudo');
   conteudo.innerHTML = '<p style="color: var(--text-secondary);">Consultando a Pesquisa de Preços...</p>';
-
   try {
-    const precos = await buscarPesquisaDePrecos(it.codigoItem);
+    const precos = await buscarPesquisaDePrecos(mapeamento.codigoItem);
+    catmatFlowPrecosDisponiveis = precos;
     renderCatmatEtapaPreco(precos);
   } catch (error) {
     console.error("Erro ao buscar a Pesquisa de Preços:", error);
     renderCatmatEtapaPreco([]);
-    showToast("Não foi possível consultar a Pesquisa de Preços — você pode digitar o valor manualmente.", "warning");
+    showToast("Não foi possível consultar a Pesquisa de Preços — você pode seguir sem selecionar nenhuma.", "warning");
   }
 }
 
@@ -3725,107 +3975,108 @@ function renderCatmatEtapaPreco(precos) {
   const intro = document.createElement('p');
   intro.style.cssText = 'color: var(--text-secondary); margin-bottom: 1rem;';
   intro.textContent = precos.length > 0
-    ? 'Últimas compras desse item no governo — clique na que quiser usar como referência:'
-    : 'Nenhuma compra recente foi encontrada pra esse item na Pesquisa de Preços — você pode seguir e digitar o valor manualmente.';
+    ? 'Marque até 3 compras recentes do governo pra usar como referência de preço:'
+    : 'Nenhuma compra recente foi encontrada pra esse item na Pesquisa de Preços — você pode seguir sem selecionar nenhuma.';
   conteudo.appendChild(intro);
 
-  const lista = document.createElement('div');
-  lista.className = 'liberacao-items-list';
-  lista.style.maxHeight = '320px';
+  if (precos.length > 0) {
+    const lista = document.createElement('div');
+    lista.className = 'liberacao-items-list';
+    lista.style.maxHeight = '280px';
 
-  precos.forEach(p => {
-    const row = document.createElement('div');
-    row.className = 'pedido-obtencao-item-row catmat-candidato-row';
-    row.innerHTML = `
-      <div style="flex: 1;">
+    precos.forEach((p, idx) => {
+      const row = document.createElement('label');
+      row.className = 'pedido-obtencao-item-row catmat-candidato-row';
+      row.style.cursor = 'pointer';
+
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = catmatFlowPrecosMarcados.includes(idx);
+      checkbox.addEventListener('change', (e) => {
+        if (e.target.checked) {
+          if (catmatFlowPrecosMarcados.length >= 3) {
+            e.target.checked = false;
+            showToast("Já tem 3 preços marcados — desmarque um pra trocar.", "warning");
+            return;
+          }
+          catmatFlowPrecosMarcados.push(idx);
+        } else {
+          catmatFlowPrecosMarcados = catmatFlowPrecosMarcados.filter(i => i !== idx);
+        }
+      });
+      row.appendChild(checkbox);
+
+      const info = document.createElement('div');
+      info.style.flex = '1';
+      info.innerHTML = `
         <div class="pedido-obtencao-item-name">${formatCurrencyBRL(p.precoUnitario)}</div>
         <div class="pedido-obtencao-item-meta">${p.nomeFornecedor} · ${formatarDataBR(p.dataCompra)} · ${p.nomeUasg}${p.estado ? ' (' + p.estado + ')' : ''}</div>
-      </div>
-    `;
-    row.addEventListener('click', () => handleEscolherPreco(p));
-    lista.appendChild(row);
-  });
+      `;
+      row.appendChild(info);
 
-  conteudo.appendChild(lista);
-  renderCatmatBotoesNavegacao({ permitirVoltar: true, permitirPular: true, permitirSemPreco: true });
-}
+      lista.appendChild(row);
+    });
 
-function handleEscolherPreco(preco) {
-  catmatFlowPrecoEscolhido = preco;
-  renderCatmatEtapaFinal();
-}
+    conteudo.appendChild(lista);
+  }
 
-function handleSemPreco() {
-  catmatFlowPrecoEscolhido = null;
-  renderCatmatEtapaFinal();
-}
-
-function renderCatmatEtapaFinal() {
-  catmatFlowEtapa = 'final';
   const item = itemAtualDoFluxoCatmat();
-  const conteudo = document.getElementById('pontoCompraCasamentoConteudo');
-
-  const descricaoPadrao = catmatFlowItemEscolhido ? catmatFlowItemEscolhido.descricaoItem : item.produto;
-  const valorPadrao = catmatFlowPrecoEscolhido ? catmatFlowPrecoEscolhido.precoUnitario : '';
-
-  conteudo.innerHTML = `
+  const campos = document.createElement('div');
+  campos.style.marginTop = '1.25rem';
+  campos.innerHTML = `
     <div class="filter-group" style="margin-bottom: 1rem;">
-      <label for="catmatFinalDescricao">Descrição (pode editar)</label>
-      <textarea id="catmatFinalDescricao" rows="3">${descricaoPadrao}</textarea>
+      <label for="catmatFinalUnidade">Unidade de Medida</label>
+      <input type="text" id="catmatFinalUnidade" value="${item.un || ''}" placeholder="Ex: Garrafa 5 Litros">
     </div>
-    <div class="filter-group" style="margin-bottom: 1rem;">
-      <label for="catmatFinalQuantidade">Quantidade a comprar</label>
-      <input type="number" id="catmatFinalQuantidade" min="1" step="1" value="1">
+    <div class="form-footer-inputs">
+      <div class="filter-group">
+        <label for="catmatFinalQtdMinima">QTD mín. a adquirir</label>
+        <input type="number" id="catmatFinalQtdMinima" min="0" step="1">
+      </div>
+      <div class="filter-group">
+        <label for="catmatFinalQtdMaxima">QTD máx. a adquirir</label>
+        <input type="number" id="catmatFinalQtdMaxima" min="0" step="1">
+      </div>
+      <div class="filter-group">
+        <label for="catmatFinalQtdTotal">QTD Total</label>
+        <input type="number" id="catmatFinalQtdTotal" min="0" step="1">
+      </div>
     </div>
-    <div class="filter-group" style="margin-bottom: 1rem;">
-      <label for="catmatFinalValorUnitario">Valor unitário (R$)</label>
-      <input type="number" id="catmatFinalValorUnitario" min="0" step="0.01" value="${valorPadrao}">
-    </div>
-    <div class="filter-group" style="margin-bottom: 1rem; flex-direction: row; align-items: center; gap: 0.5rem;">
-      <input type="checkbox" id="catmatFinalSalvarDemanda" style="width: auto;" checked>
-      <label for="catmatFinalSalvarDemanda" style="margin: 0;">Salvar esse fornecedor neste produto, pra não precisar pesquisar de novo</label>
-    </div>
-    <div class="filter-group" id="catmatFinalSenhaGroup" style="margin-bottom: 1rem;">
-      <label for="catmatFinalSenha">Senha da Diretoria</label>
-      <input type="password" id="catmatFinalSenha" placeholder="Digite a senha...">
-    </div>
-    <p id="catmatFinalError" class="modal-error-text hidden"></p>
+    <p id="catmatFinalError" class="modal-error-text hidden" style="margin-top: 0.75rem;"></p>
   `;
+  conteudo.appendChild(campos);
 
-  document.getElementById('catmatFinalSalvarDemanda').addEventListener('change', (e) => {
-    document.getElementById('catmatFinalSenhaGroup').classList.toggle('hidden', !e.target.checked);
-  });
-
-  renderCatmatBotoesNavegacao({ permitirVoltar: true, permitirPular: true, permitirConfirmar: true });
+  renderCatmatBotoesNavegacao({ permitirCancelar: true, permitirVoltar: true, permitirPular: true, permitirConfirmar: true });
 }
 
 /**
- * Monta os botões de navegação do rodapé do fluxo de casamento, variando
- * conforme a etapa atual (nem toda etapa tem "Voltar" ou "Confirmar item").
+ * Monta os botões de navegação do rodapé da Etapa B — Cancelar e Voltar
+ * sempre aparecem (Voltar no 1º item volta pra Etapa A, a lista de
+ * revisão, em vez de tentar um item -1).
  */
-function renderCatmatBotoesNavegacao({ permitirVoltar = false, permitirPular = false, permitirSemPreco = false, permitirConfirmar = false } = {}) {
+function renderCatmatBotoesNavegacao({ permitirCancelar = false, permitirVoltar = false, permitirPular = false, permitirConfirmar = false } = {}) {
   const conteudo = document.getElementById('pontoCompraCasamentoConteudo');
 
   const nav = document.createElement('div');
   nav.className = 'form-actions';
   nav.style.marginTop = '1.5rem';
 
+  if (permitirCancelar) {
+    const btnCancelar = document.createElement('button');
+    btnCancelar.type = 'button';
+    btnCancelar.className = 'btn btn-secondary';
+    btnCancelar.textContent = 'Cancelar';
+    btnCancelar.addEventListener('click', () => mostrarPontoCompraScreen('filtros'));
+    nav.appendChild(btnCancelar);
+  }
+
   if (permitirVoltar) {
     const btnVoltar = document.createElement('button');
     btnVoltar.type = 'button';
     btnVoltar.className = 'btn btn-secondary';
     btnVoltar.textContent = 'Voltar';
-    btnVoltar.addEventListener('click', handleVoltarEtapaCatmat);
+    btnVoltar.addEventListener('click', handleVoltarItemCatmat);
     nav.appendChild(btnVoltar);
-  }
-
-  if (permitirSemPreco) {
-    const btnSemPreco = document.createElement('button');
-    btnSemPreco.type = 'button';
-    btnSemPreco.className = 'btn btn-secondary';
-    btnSemPreco.textContent = 'Seguir sem escolher um preço';
-    btnSemPreco.addEventListener('click', handleSemPreco);
-    nav.appendChild(btnSemPreco);
   }
 
   if (permitirPular) {
@@ -3850,21 +4101,20 @@ function renderCatmatBotoesNavegacao({ permitirVoltar = false, permitirPular = f
   conteudo.appendChild(nav);
 }
 
-function handleVoltarEtapaCatmat() {
-  if (catmatFlowEtapa === 'item') {
-    iniciarEtapaPdmDoItemAtual();
-  } else if (catmatFlowEtapa === 'preco') {
-    renderCatmatEtapaItem(buscarItensParecidosNoPdm(itemAtualDoFluxoCatmat().produto, catmatFlowItensCatmat));
-    catmatFlowEtapa = 'item';
-  } else if (catmatFlowEtapa === 'final') {
-    handleEscolherItemCatmat(catmatFlowItemEscolhido);
+function handleVoltarItemCatmat() {
+  if (catmatFlowIndex === 0) {
+    mostrarPontoCompraScreen('selecionavel');
+    renderPontoCompraSelecionavelLista();
+    return;
   }
+  catmatFlowIndex--;
+  iniciarEtapaPrecoDoItemAtual();
 }
 
 function avancarParaProximoItemCatmat() {
   catmatFlowIndex++;
   if (catmatFlowIndex < catmatFlowItens.length) {
-    iniciarEtapaPdmDoItemAtual();
+    iniciarEtapaPrecoDoItemAtual();
   } else {
     finalizarFluxoCatmat();
   }
@@ -3875,104 +4125,991 @@ function handlePularItemCatmat() {
   avancarParaProximoItemCatmat();
 }
 
+async function callEstoquePesquisaPrecosSalvar({ estoqueId, produto, codigoItem, descricaoItem, unidade, qtdMinima, qtdMaxima, qtdTotal, precos, senha }) {
+  if (!USE_SUPABASE) {
+    return { status: 'error', message: 'Essa funcionalidade só está disponível com o Supabase ativado.' };
+  }
+  return rpcResultParaRespostaLegada(
+    await supabaseClient.rpc('estoque_pesquisa_precos_salvar', {
+      p_estoque_id: estoqueId,
+      p_produto: produto,
+      p_codigo_item: codigoItem || null,
+      p_descricao_item: descricaoItem || null,
+      p_unidade: unidade || null,
+      p_qtd_minima: qtdMinima,
+      p_qtd_maxima: qtdMaxima,
+      p_qtd_total: qtdTotal,
+      p_precos: precos,
+      p_senha: senha
+    }),
+    data => ({ item: data })
+  );
+}
+
 async function handleConfirmarItemCatmat() {
   const errorEl = document.getElementById('catmatFinalError');
   errorEl.classList.add('hidden');
 
-  const descricao = document.getElementById('catmatFinalDescricao').value.trim();
-  const quantidadeStr = document.getElementById('catmatFinalQuantidade').value;
-  const valorStr = document.getElementById('catmatFinalValorUnitario').value;
-  const salvar = document.getElementById('catmatFinalSalvarDemanda').checked;
-  const senha = document.getElementById('catmatFinalSenha').value;
+  const unidade = document.getElementById('catmatFinalUnidade').value.trim();
+  const qtdMinimaStr = document.getElementById('catmatFinalQtdMinima').value;
+  const qtdMaximaStr = document.getElementById('catmatFinalQtdMaxima').value;
+  const qtdTotalStr = document.getElementById('catmatFinalQtdTotal').value;
 
-  if (!descricao) {
-    errorEl.textContent = 'Informe a descrição do item.';
-    errorEl.classList.remove('hidden');
-    return;
-  }
-  if (quantidadeStr === '' || Number(quantidadeStr) <= 0) {
-    errorEl.textContent = 'Informe uma quantidade válida (maior que zero).';
-    errorEl.classList.remove('hidden');
-    return;
-  }
-  if (salvar && !senha) {
-    errorEl.textContent = 'Informe a senha da Diretoria pra salvar o fornecedor, ou desmarque a opção acima.';
-    errorEl.classList.remove('hidden');
-    return;
-  }
+  const senha = obterSenhaPontoCompraSessao();
+  if (!senha) return;
 
   const item = itemAtualDoFluxoCatmat();
+  const mapeamento = mapeamentoAtualDoFluxoCatmat();
+  const precosEscolhidos = catmatFlowPrecosMarcados.map(idx => {
+    const p = catmatFlowPrecosDisponiveis[idx];
+    return {
+      precoUnitario: p.precoUnitario,
+      nomeFornecedor: p.nomeFornecedor,
+      dataCompra: p.dataCompra,
+      nomeUasg: p.nomeUasg,
+      estado: p.estado
+    };
+  });
+
   const resultado = {
-    descricaoFornecedor: descricao,
-    unidade: item.un || '',
-    quantidade: Number(quantidadeStr),
-    valorUnitario: valorStr === '' ? 0 : Number(valorStr),
-    catmat: catmatFlowItemEscolhido ? String(catmatFlowItemEscolhido.codigoItem) : ''
+    codigoItem: mapeamento ? mapeamento.codigoItem : null,
+    descricaoItem: mapeamento ? mapeamento.descricaoItem : item.produto,
+    unidade,
+    qtdMinima: qtdMinimaStr === '' ? null : Number(qtdMinimaStr),
+    qtdMaxima: qtdMaximaStr === '' ? null : Number(qtdMaximaStr),
+    qtdTotal: qtdTotalStr === '' ? null : Number(qtdTotalStr),
+    precos: precosEscolhidos
   };
 
-  if (salvar) {
-    const confirmBtn = document.getElementById('btnConfirmarItemCatmat');
-    setButtonProcessing(confirmBtn, 'Salvando...');
-    try {
-      const resData = await callDemandaEditarFornecedor({
-        material: item.produto,
-        descricaoFornecedor: resultado.descricaoFornecedor,
+  const confirmBtn = document.getElementById('btnConfirmarItemCatmat');
+  setButtonProcessing(confirmBtn, 'Salvando...');
+  try {
+    // Item novo (sem estoque_id, veio de "Gerar lista própria para ATA" sem
+    // correspondência no Estoque) — não dá pra gravar em
+    // estoque_pesquisa_precos (exige estoque_id real); os preços ficam só
+    // na memória do fluxo, pra entrar na Manifestação/Apêndice II mesmo
+    // assim.
+    if (item.estoqueId) {
+      const resData = await callEstoquePesquisaPrecosSalvar({
+        estoqueId: item.estoqueId,
+        produto: item.produto,
+        codigoItem: resultado.codigoItem,
+        descricaoItem: resultado.descricaoItem,
         unidade: resultado.unidade,
-        quantidade: resultado.quantidade,
-        valorUnitario: resultado.valorUnitario,
-        catmat: resultado.catmat,
+        qtdMinima: resultado.qtdMinima,
+        qtdMaxima: resultado.qtdMaxima,
+        qtdTotal: resultado.qtdTotal,
+        precos: precosEscolhidos,
         senha
       });
       if (!resData || resData.status !== 'success') {
-        throw new Error(resData.message || 'Erro ao salvar o fornecedor.');
+        throw new Error(resData.message || 'Erro ao salvar os preços.');
       }
-    } catch (error) {
-      console.error("Erro ao salvar fornecedor na Demanda:", error);
-      errorEl.textContent = error.message || 'Erro ao salvar o fornecedor. Tente novamente.';
-      errorEl.classList.remove('hidden');
-      clearButtonProcessing(confirmBtn);
-      return;
     }
+  } catch (error) {
+    console.error("Erro ao salvar a Pesquisa de Preços do item:", error);
+    errorEl.textContent = error.message || 'Erro ao salvar. Tente novamente.';
+    errorEl.classList.remove('hidden');
     clearButtonProcessing(confirmBtn);
+    return;
   }
+  clearButtonProcessing(confirmBtn);
 
   catmatFlowResultados[catmatFlowIndex] = resultado;
   avancarParaProximoItemCatmat();
 }
 
 function finalizarFluxoCatmat() {
-  pedidoObtencaoItems = catmatFlowItens
+  const itensFinais = catmatFlowItens
     .map((item, idx) => ({ item, resultado: catmatFlowResultados[idx] }))
     .filter(({ resultado }) => resultado)
     .map(({ item, resultado }) => ({
       produto: item.produto,
-      estoqueAtual: item.estoqueAtual,
-      pontoPedido: item.pontoPedido,
-      demanda: {
-        material: item.produto,
-        descricaoFornecedor: resultado.descricaoFornecedor,
-        unidade: resultado.unidade,
-        qtdMinima: resultado.quantidade,
-        multiplicador: 1,
-        valorUnitario: resultado.valorUnitario || 0,
-        catmat: resultado.catmat || ''
-      },
-      selecionado: true
-    }))
-    .sort((a, b) => a.produto.localeCompare(b.produto));
+      descricaoItem: resultado.descricaoItem,
+      codigoItem: resultado.codigoItem,
+      unidade: resultado.unidade,
+      qtdMinima: resultado.qtdMinima,
+      qtdMaxima: resultado.qtdMaxima,
+      qtdTotal: resultado.qtdTotal,
+      precos: resultado.precos || []
+    }));
 
-  mostrarPontoCompraScreen('filtros');
-
-  if (pedidoObtencaoItems.length === 0) {
-    showToast("Nenhum item foi resolvido — nenhum Pedido de Obtenção foi gerado.", "warning");
+  if (itensFinais.length === 0) {
+    mostrarPontoCompraScreen('filtros');
+    showToast("Nenhum item foi resolvido — nenhuma Manifestação de Interesse foi gerada.", "warning");
     return;
   }
 
-  document.getElementById('pedidoObtencaoNumero').value = '';
-  document.getElementById('pedidoObtencaoEmails').value = '';
-  document.getElementById('pedidoObtencaoError').classList.add('hidden');
-  renderPedidoObtencaoItemsList();
-  document.getElementById('pedidoObtencaoModal').classList.remove('hidden');
+  catmatFlowItensFinais = itensFinais;
+  mostrarPontoCompraScreen('finalizar');
+  document.getElementById('manifestacaoAno').value = new Date().getFullYear();
+  document.getElementById('manifestacaoTitulo').value = '';
+  document.getElementById('manifestacaoNup').value = '';
+  document.getElementById('pontoCompraFinalizarError').classList.add('hidden');
+  renderDocumentosFixosPontoCompra();
+}
+
+function handleCancelarPontoCompraFinalizar() {
+  mostrarPontoCompraScreen('filtros');
+}
+
+/**
+ * Converte uma string base64 (como guardada em pontocompra_documentos_fixos)
+ * num Blob de .docx e dispara o download — mesmo padrão de baixarBlobComoArquivo.
+ */
+function baixarDocumentoFixoBase64(base64, nomeArquivo) {
+  const binario = atob(base64);
+  const bytes = new Uint8Array(binario.length);
+  for (let i = 0; i < binario.length; i++) bytes[i] = binario.charCodeAt(i);
+  const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+  baixarBlobComoArquivo(blob, nomeArquivo);
+}
+
+/**
+ * Os 4 documentos fixos (ETP, TR, Declaração de Planejamento Estratégico,
+ * DFD) só existem hoje pra Produto de limpeza — mesmo conteúdo sempre,
+ * por isso ficam guardados prontos em pontocompra_documentos_fixos em vez
+ * de remontados a cada download (ver 003_funcoes.sql,
+ * pontocompra_documento_fixo_salvar).
+ */
+async function renderDocumentosFixosPontoCompra() {
+  const container = document.getElementById('pontoCompraDocumentosFixos');
+  container.innerHTML = '';
+  if (catmatFlowCategoria !== 'Produto de limpeza') return;
+
+  container.innerHTML = '<p style="color: var(--text-secondary); margin-bottom: 0.75rem;">Carregando documentos fixos da categoria...</p>';
+  try {
+    const documentos = await supabaseSelectAll('pontocompra_documentos_fixos');
+    if (documentos.length === 0) {
+      container.innerHTML = '';
+      return;
+    }
+    container.innerHTML = '<p style="color: var(--text-secondary); margin-bottom: 0.75rem;">Documentos Gerados</p>';
+    const lista = document.createElement('div');
+    lista.style.cssText = 'display: flex; flex-wrap: wrap; gap: 0.5rem;';
+    documentos.forEach(doc => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn btn-secondary';
+      btn.textContent = `Baixar ${doc.nome_arquivo.replace(/\.docx$/i, '')} (.docx)`;
+      btn.addEventListener('click', () => baixarDocumentoFixoBase64(doc.conteudo_base64, doc.nome_arquivo));
+      lista.appendChild(btn);
+    });
+    container.appendChild(lista);
+  } catch (error) {
+    console.error("Erro ao buscar os documentos fixos do Ponto de Compra:", error);
+    container.innerHTML = '';
+  }
+}
+
+/**
+ * Monta a "Manifestação de Interesse de Participação na IRP" (modelo do
+ * CIM Ladário, anexado pelo usuário) como .docx editável — mesma
+ * biblioteca docx (window.docx) e padrão de gerarPedidoObtencaoDocx. Os
+ * até 3 preços escolhidos na Etapa B NÃO entram aqui (ficam só
+ * guardados em estoque_pesquisa_precos pra uso futuro).
+ */
+async function gerarManifestacaoInteresseDocx(itens, cabecalho) {
+  const {
+    Document, Paragraph, TextRun, Table, TableRow, TableCell, AlignmentType,
+    WidthType, BorderStyle, VerticalAlign, Packer, convertMillimetersToTwip
+  } = docx;
+
+  const bordaFina = { style: BorderStyle.SINGLE, size: 2, color: '999999' };
+  const bordasTabela = { top: bordaFina, bottom: bordaFina, left: bordaFina, right: bordaFina, insideHorizontal: bordaFina, insideVertical: bordaFina };
+
+  function textoCentrado(texto, { bold = false, size = 19 } = {}) {
+    return new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 80 }, children: [new TextRun({ text: texto, bold, size })] });
+  }
+
+  function celula(texto, { header = false, align = AlignmentType.LEFT, width } = {}) {
+    return new TableCell({
+      width: width ? { size: width, type: WidthType.PERCENTAGE } : undefined,
+      shading: header ? { fill: '2563EB' } : undefined,
+      verticalAlign: VerticalAlign.CENTER,
+      children: [new Paragraph({
+        alignment: align,
+        children: [new TextRun({ text: String(texto ?? ''), bold: header, color: header ? 'FFFFFF' : undefined, size: 16 })]
+      })]
+    });
+  }
+
+  // Quantidade opcional — fica em branco (não "0") quando não foi preenchida.
+  function formatarQtdOpcional(valor) {
+    return (valor === null || valor === undefined || valor === '') ? '' : formatDataLabelValue(valor);
+  }
+
+  const larguras = [6, 40, 10, 15, 10, 10, 9];
+  const linhasTabela = itens.map((item, i) => new TableRow({
+    children: [
+      celula(String(i + 1), { align: AlignmentType.CENTER, width: larguras[0] }),
+      celula(item.descricaoItem || item.produto, { width: larguras[1] }),
+      celula(item.codigoItem || '—', { align: AlignmentType.CENTER, width: larguras[2] }),
+      celula(item.unidade || '', { align: AlignmentType.CENTER, width: larguras[3] }),
+      celula(formatarQtdOpcional(item.qtdMinima), { align: AlignmentType.CENTER, width: larguras[4] }),
+      celula(formatarQtdOpcional(item.qtdMaxima), { align: AlignmentType.CENTER, width: larguras[5] }),
+      celula(formatarQtdOpcional(item.qtdTotal), { align: AlignmentType.CENTER, width: larguras[6] })
+    ]
+  }));
+
+  const tabela = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: bordasTabela,
+    rows: [
+      new TableRow({
+        tableHeader: true,
+        children: ['ITEM', 'ESPECIFICAÇÃO', 'CATMAT', 'UNIDADE DE MEDIDA', 'QTD MÍN. A SER ADQUIRIDA', 'QTD MÁX. A SER ADQUIRIDA', 'QTD TOTAL'].map((t, i) =>
+          celula(t, { header: true, align: i === 1 ? AlignmentType.LEFT : AlignmentType.CENTER, width: larguras[i] })
+        )
+      }),
+      ...linhasTabela
+    ]
+  });
+
+  const doc = new Document({
+    sections: [{
+      properties: {
+        page: {
+          margin: {
+            top: convertMillimetersToTwip(15), bottom: convertMillimetersToTwip(15),
+            left: convertMillimetersToTwip(14), right: convertMillimetersToTwip(14)
+          }
+        }
+      },
+      children: [
+        textoCentrado('MARINHA DO BRASIL', { bold: true, size: 24 }),
+        textoCentrado('CENTRO DE INTENDÊNCIA DA MARINHA EM LADÁRIO', { bold: true, size: 20 }),
+        textoCentrado(`MANIFESTAÇÃO DE INTERESSE DE PARTICIPAÇÃO NA IRP ${cabecalho.ano}`, { bold: true, size: 21 }),
+        textoCentrado(cabecalho.titulo, { bold: true, size: 19 }),
+        textoCentrado(`NUP: ${cabecalho.nup || ''}`),
+        textoCentrado(`NOME DA OM: ${cabecalho.nomeOm}`),
+        textoCentrado(`UASG: ${cabecalho.uasg}`),
+        new Paragraph({ spacing: { after: 150 }, children: [] }),
+        tabela,
+        new Paragraph({ spacing: { before: 300, after: 150 }, children: [] }),
+        textoCentrado(`Ladário, MS, _____ de _________________ de ${cabecalho.ano}.`),
+        new Paragraph({ spacing: { before: 400 }, children: [] }),
+        textoCentrado('_____________________________________'),
+        textoCentrado('RAMON FERREIRA RODRIGUES', { bold: true }),
+        textoCentrado('Capitão de Mar e Guerra'),
+        textoCentrado('Ordenador de Despesa')
+      ]
+    }]
+  });
+
+  return await Packer.toBlob(doc);
+}
+
+/** Lê e valida os campos de cabeçalho da Etapa C — reaproveitados pela Manifestação de Interesse E pelo Apêndice II, mesmo cabeçalho pros dois. */
+function lerCabecalhoPontoCompraFinalizar() {
+  const errorEl = document.getElementById('pontoCompraFinalizarError');
+  errorEl.classList.add('hidden');
+
+  const ano = document.getElementById('manifestacaoAno').value.trim();
+  const titulo = document.getElementById('manifestacaoTitulo').value.trim();
+  const nup = document.getElementById('manifestacaoNup').value.trim();
+  const nomeOm = document.getElementById('manifestacaoNomeOm').value.trim();
+  const uasg = document.getElementById('manifestacaoUasg').value.trim();
+
+  if (!ano || !titulo || !nomeOm || !uasg) {
+    errorEl.textContent = 'Preencha ano, título da categoria, nome da OM e UASG.';
+    errorEl.classList.remove('hidden');
+    return null;
+  }
+
+  return { ano, titulo, nup, nomeOm, uasg };
+}
+
+async function handleBaixarManifestacaoInteresse() {
+  const cabecalho = lerCabecalhoPontoCompraFinalizar();
+  if (!cabecalho) return;
+
+  const errorEl = document.getElementById('pontoCompraFinalizarError');
+  const btn = document.getElementById('btnBaixarManifestacaoInteresse');
+  setButtonProcessing(btn, 'Gerando...');
+  try {
+    const blob = await gerarManifestacaoInteresseDocx(catmatFlowItensFinais, cabecalho);
+    const tituloSeguro = (cabecalho.titulo.replace(/[^a-zA-Z0-9]+/g, '_') || 'Manifestacao_de_Interesse');
+    baixarBlobComoArquivo(blob, `Manifestacao_de_Interesse_${tituloSeguro}.docx`);
+  } catch (error) {
+    console.error("Erro ao gerar a Manifestação de Interesse:", error);
+    errorEl.textContent = 'Erro ao gerar o documento Word. Tente novamente.';
+    errorEl.classList.remove('hidden');
+  } finally {
+    clearButtonProcessing(btn);
+  }
+}
+
+/**
+ * Monta o Apêndice II - Relação de Itens em .xlsx (mesmo cabeçalho da
+ * Manifestação de Interesse) — os mesmos itens, mais os até 3 preços
+ * escolhidos na Pesquisa de Preços (Etapa B) e seu preço médio, e uma
+ * coluna Total (preço médio × QTD mínima), com o somatório geral na
+ * última linha. Usa a biblioteca xlsx (SheetJS, window.XLSX, carregada
+ * via CDN no index.html) — gerada 100% no navegador, igual ao .docx.
+ */
+function gerarApendiceIIXlsx(itens, cabecalho) {
+  const linhas = [];
+  linhas.push(['MARINHA DO BRASIL']);
+  linhas.push(['CENTRO DE INTENDÊNCIA DA MARINHA EM LADÁRIO']);
+  linhas.push([`MANIFESTAÇÃO DE INTERESSE DE PARTICIPAÇÃO NA IRP ${cabecalho.ano}`]);
+  linhas.push([cabecalho.titulo]);
+  linhas.push([`NUP: ${cabecalho.nup || ''}`]);
+  linhas.push([`NOME DA OM: ${cabecalho.nomeOm}`]);
+  linhas.push([`UASG: ${cabecalho.uasg}`]);
+  linhas.push([]);
+  linhas.push(['APÊNDICE II - RELAÇÃO DE ITENS']);
+  linhas.push([]);
+
+  const linhaCabecalhoTabela = linhas.length;
+  linhas.push(['ITEM', 'ESPECIFICAÇÃO', 'CATMAT', 'UNIDADE DE MEDIDA', 'QTD MÍN. A SER ADQUIRIDA', 'QTD MÁX. A SER ADQUIRIDA', 'QTD TOTAL', 'PREÇO 1 (R$)', 'PREÇO 2 (R$)', 'PREÇO 3 (R$)', 'PREÇO MÉDIO (R$)', 'TOTAL (R$)']);
+
+  let totalGeral = 0;
+  itens.forEach((item, i) => {
+    const precos = (item.precos || []).map(p => Number(p.precoUnitario)).filter(v => !isNaN(v));
+    const precoMedio = precos.length > 0 ? precos.reduce((a, b) => a + b, 0) / precos.length : null;
+    const total = (precoMedio !== null && item.qtdMinima) ? precoMedio * item.qtdMinima : null;
+    if (total !== null) totalGeral += total;
+
+    linhas.push([
+      i + 1,
+      item.descricaoItem || item.produto,
+      item.codigoItem || '',
+      item.unidade || '',
+      item.qtdMinima ?? '',
+      item.qtdMaxima ?? '',
+      item.qtdTotal ?? '',
+      precos[0] ?? '',
+      precos[1] ?? '',
+      precos[2] ?? '',
+      precoMedio ?? '',
+      total ?? ''
+    ]);
+  });
+
+  const linhaTotalGeral = linhas.length;
+  linhas.push(['', '', '', '', '', '', '', '', '', '', 'TOTAL GERAL', totalGeral]);
+
+  const ws = XLSX.utils.aoa_to_sheet(linhas);
+  ws['!cols'] = [
+    { wch: 6 }, { wch: 55 }, { wch: 10 }, { wch: 18 }, { wch: 10 }, { wch: 10 }, { wch: 10 },
+    { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 14 }, { wch: 14 }
+  ];
+
+  // Formata como moeda as colunas de preço/total, do começo dos itens até a linha do total geral.
+  const colunasMoeda = [7, 8, 9, 10, 11]; // PREÇO 1/2/3, PREÇO MÉDIO, TOTAL
+  for (let linha = linhaCabecalhoTabela + 1; linha <= linhaTotalGeral; linha++) {
+    colunasMoeda.forEach(col => {
+      const endereco = XLSX.utils.encode_cell({ r: linha, c: col });
+      const celula = ws[endereco];
+      if (celula && typeof celula.v === 'number') celula.z = '"R$" #,##0.00';
+    });
+  }
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Apêndice II');
+  const arrayBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  return new Blob([arrayBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+function handleBaixarApendiceIIXlsx() {
+  const cabecalho = lerCabecalhoPontoCompraFinalizar();
+  if (!cabecalho) return;
+
+  try {
+    const blob = gerarApendiceIIXlsx(catmatFlowItensFinais, cabecalho);
+    const tituloSeguro = (cabecalho.titulo.replace(/[^a-zA-Z0-9]+/g, '_') || 'Apendice_II');
+    baixarBlobComoArquivo(blob, `Apendice_II_Relacao_de_Itens_${tituloSeguro}.xlsx`);
+  } catch (error) {
+    console.error("Erro ao gerar o Apêndice II:", error);
+    const errorEl = document.getElementById('pontoCompraFinalizarError');
+    errorEl.textContent = 'Erro ao gerar a planilha Excel. Tente novamente.';
+    errorEl.classList.remove('hidden');
+  }
+}
+
+// =====================================================================
+// Mapeamento em lote com o CATMAT (tela "Mapeamento CATMAT" do menu,
+// acesso restrito ao perfil administrador) — liga cada produto do Estoque
+// ao Grupo/Classe/PDM/descrição mais parecida no catálogo oficial, base
+// pra uma futura ATA de Registro de Preços. Reaproveita 100% as buscas já
+// construídas na Parte 2 do Ponto de Compra (buscarPdmsParecidos,
+// buscarItensCatmatDoPdm, buscarItensParecidosNoPdm) — este bloco só
+// orquestra em lote (com retomada, pra poder fechar a aba no meio de um
+// processamento de ~1.900 itens e continuar depois) e monta a fila de
+// revisão por cima.
+// =====================================================================
+
+function mapCatmatMapeamentoRow(row) {
+  return {
+    id: row.id,
+    estoqueId: row.estoque_id,
+    produto: row.produto,
+    codigoGrupo: row.codigo_grupo,
+    nomeGrupo: row.nome_grupo,
+    codigoClasse: row.codigo_classe,
+    nomeClasse: row.nome_classe,
+    codigoPdm: row.codigo_pdm,
+    nomePdm: row.nome_pdm,
+    codigoItem: row.codigo_item,
+    descricaoItem: row.descricao_item,
+    score: row.score,
+    status: row.status
+  };
+}
+
+async function callCatmatMapeamentoSalvar({ estoqueId, produto, codigoGrupo, nomeGrupo, codigoClasse, nomeClasse, codigoPdm, nomePdm, codigoItem, descricaoItem, score, status, senha }) {
+  if (!USE_SUPABASE) {
+    return { status: 'error', message: 'Essa funcionalidade só está disponível com o Supabase ativado.' };
+  }
+  return rpcResultParaRespostaLegada(
+    await supabaseClient.rpc('catmat_mapeamento_salvar', {
+      p_estoque_id: estoqueId,
+      p_produto: produto,
+      p_codigo_grupo: codigoGrupo || null,
+      p_nome_grupo: nomeGrupo || null,
+      p_codigo_classe: codigoClasse || null,
+      p_nome_classe: nomeClasse || null,
+      p_codigo_pdm: codigoPdm || null,
+      p_nome_pdm: nomePdm || null,
+      p_codigo_item: codigoItem || null,
+      p_descricao_item: descricaoItem || null,
+      p_score: (score !== undefined && score !== null) ? score : null,
+      p_status: status,
+      p_senha: senha
+    }),
+    data => ({ item: mapCatmatMapeamentoRow(data) })
+  );
+}
+
+async function carregarMapeamentoCatmatCompleto() {
+  const rows = await supabaseSelectAll('estoque_catmat_mapeamento');
+  return rows.map(mapCatmatMapeamentoRow);
+}
+
+/** O mapeamento CATMAT de um único produto do Estoque (ou null se nunca foi mapeado) — usado pelo lápis "Editar Produto". */
+async function buscarCatmatMapeamentoPorEstoqueId(estoqueId) {
+  const { data, error } = await supabaseClient
+    .from('estoque_catmat_mapeamento')
+    .select('*')
+    .eq('estoque_id', estoqueId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? mapCatmatMapeamentoRow(data) : null;
+}
+
+function esperarMs(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// --- Geração em lote (automática, retomável) ---
+
+let catmatMapeamentoDevePausar = false;
+let catmatMapeamentoRodando = false;
+
+function initializeCatmatMapeamentoModule() {
+  document.getElementById('btnIniciarMapeamentoCatmat').addEventListener('click', handleIniciarMapeamentoCatmat);
+  document.getElementById('btnPararMapeamentoCatmat').addEventListener('click', () => {
+    catmatMapeamentoDevePausar = true;
+  });
+
+  document.getElementById('catmatTrocarModal').addEventListener('click', (e) => {
+    if (e.target.id === 'catmatTrocarModal') {
+      fecharTrocarCatmatModal();
+    }
+  });
+}
+
+async function handleIniciarMapeamentoCatmat() {
+  const errorEl = document.getElementById('catmatGeracaoError');
+  errorEl.classList.add('hidden');
+
+  const categorias = Array.from(document.querySelectorAll('.catmat-geracao-categoria:checked')).map(el => el.value);
+  const senha = document.getElementById('catmatGeracaoSenha').value;
+
+  if (categorias.length === 0) {
+    errorEl.textContent = 'Escolha pelo menos uma categoria.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  if (!senha) {
+    errorEl.textContent = 'Informe a senha da Diretoria.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  if (stockLevelsFetchPromise) {
+    await stockLevelsFetchPromise;
+  }
+
+  const btnIniciar = document.getElementById('btnIniciarMapeamentoCatmat');
+  const btnParar = document.getElementById('btnPararMapeamentoCatmat');
+  const progresso = document.getElementById('catmatGeracaoProgresso');
+  const progressoTexto = document.getElementById('catmatGeracaoProgressoTexto');
+  const progressoBarra = document.getElementById('catmatGeracaoProgressoBarra');
+
+  btnIniciar.classList.add('hidden');
+  btnParar.classList.remove('hidden');
+  progresso.classList.remove('hidden');
+  catmatMapeamentoDevePausar = false;
+  catmatMapeamentoRodando = true;
+
+  try {
+    const itens = stockData.filter(item => categorias.includes(item.categoria));
+    const jaMapeados = await carregarMapeamentoCatmatCompleto();
+    const idsJaMapeados = new Set(jaMapeados.map(m => m.estoqueId));
+    const pendentes = itens.filter(item => !idsJaMapeados.has(item.id));
+
+    const total = itens.length;
+    let processados = total - pendentes.length;
+    atualizarProgressoCatmat(processados, total, progressoTexto, progressoBarra);
+
+    for (const item of pendentes) {
+      if (catmatMapeamentoDevePausar) break;
+
+      try {
+        const pdmCandidatos = await buscarPdmsParecidos(item.produto);
+        const melhorPdm = pdmCandidatos[0] || null;
+
+        if (!melhorPdm) {
+          await callCatmatMapeamentoSalvar({
+            estoqueId: item.id, produto: item.produto, status: 'sem_correspondencia', senha
+          });
+        } else {
+          const itensDoPdm = await buscarItensCatmatDoPdm(melhorPdm.codigoPdm);
+          const itemCandidatos = buscarItensParecidosNoPdm(item.produto, itensDoPdm);
+          const melhorItem = itemCandidatos[0] || null;
+
+          await callCatmatMapeamentoSalvar({
+            estoqueId: item.id,
+            produto: item.produto,
+            codigoGrupo: melhorPdm.codigoGrupo,
+            nomeGrupo: melhorPdm.nomeGrupo,
+            codigoClasse: melhorPdm.codigoClasse,
+            nomeClasse: melhorPdm.nomeClasse,
+            codigoPdm: melhorPdm.codigoPdm,
+            nomePdm: melhorPdm.nomePdm,
+            codigoItem: melhorItem ? melhorItem.codigoItem : null,
+            descricaoItem: melhorItem ? melhorItem.descricaoItem : null,
+            score: melhorItem ? melhorItem.score : melhorPdm.score,
+            status: 'pendente',
+            senha
+          });
+        }
+      } catch (itemError) {
+        console.error(`Erro ao mapear "${item.produto}":`, itemError);
+        // Não trava o lote inteiro por causa de um item — segue pro próximo
+        // (esse item simplesmente não terá linha salva e será tentado de
+        // novo na próxima vez que o lote rodar, já que a retomada pula só
+        // quem já tem registro).
+      }
+
+      processados++;
+      atualizarProgressoCatmat(processados, total, progressoTexto, progressoBarra);
+      await esperarMs(350);
+    }
+
+    if (catmatMapeamentoDevePausar) {
+      showToast("Geração pausada — pode continuar depois de onde parou.", "warning");
+    } else {
+      showToast("Geração de sugestões concluída!", "success");
+    }
+  } catch (error) {
+    console.error("Erro na geração em lote do Mapeamento CATMAT:", error);
+    errorEl.textContent = error.message || "Erro inesperado durante a geração. Tente novamente.";
+    errorEl.classList.remove('hidden');
+  } finally {
+    catmatMapeamentoRodando = false;
+    btnIniciar.classList.remove('hidden');
+    btnParar.classList.add('hidden');
+    await carregarFilaRevisaoCatmat();
+  }
+}
+
+function atualizarProgressoCatmat(processados, total, progressoTextoEl, progressoBarraEl) {
+  progressoTextoEl.textContent = `${processados} de ${total} processados`;
+  progressoBarraEl.style.width = total > 0 ? `${Math.round((processados / total) * 100)}%` : '0%';
+}
+
+// --- Fila de revisão ---
+
+let catmatFilaRevisao = [];
+
+async function carregarFilaRevisaoCatmat() {
+  const tbody = document.getElementById('catmatRevisaoTableBody');
+  tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Carregando...</td></tr>`;
+
+  try {
+    const todos = await carregarMapeamentoCatmatCompleto();
+    const contadores = document.getElementById('catmatRevisaoContadores');
+    const aprovados = todos.filter(m => m.status === 'aprovado').length;
+    const pendentes = todos.filter(m => m.status === 'pendente');
+    const semCorrespondencia = todos.filter(m => m.status === 'sem_correspondencia').length;
+    contadores.textContent = `${aprovados} aprovados · ${pendentes.length} pendentes · ${semCorrespondencia} sem correspondência`;
+
+    catmatFilaRevisao = pendentes.sort((a, b) => a.produto.localeCompare(b.produto));
+    renderFilaRevisaoCatmat();
+  } catch (error) {
+    console.error("Erro ao carregar a fila de revisão do Mapeamento CATMAT:", error);
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--color-danger); padding: 2rem;">Erro ao carregar a fila de revisão.</td></tr>`;
+  }
+}
+
+function renderFilaRevisaoCatmat() {
+  const tbody = document.getElementById('catmatRevisaoTableBody');
+  tbody.innerHTML = '';
+
+  if (catmatFilaRevisao.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Nenhum item pendente de revisão no momento</td></tr>`;
+    return;
+  }
+
+  catmatFilaRevisao.forEach(linha => {
+    const tr = document.createElement('tr');
+
+    const score = Number(linha.score) || 0;
+    const confiancaCor = score >= 0.5 ? 'var(--color-success)' : (score >= 0.25 ? 'var(--color-warning)' : 'var(--color-danger)');
+    const confiancaHtml = linha.codigoItem
+      ? `<span style="display:inline-block; width:10px; height:10px; border-radius:999px; background:${confiancaCor};" title="Pontuação: ${score.toFixed(2)}"></span>`
+      : '<span style="color: var(--text-muted);">—</span>';
+
+    tr.innerHTML = `
+      <td style="font-weight: 600; color: var(--text-primary);">${linha.produto}</td>
+      <td style="color: var(--text-secondary);">${linha.nomeGrupo || '—'}</td>
+      <td style="color: var(--text-secondary);">${linha.nomeClasse || '—'}</td>
+      <td style="color: var(--text-secondary);">${linha.nomePdm || '—'}</td>
+      <td style="color: var(--text-secondary); max-width: 320px;">${linha.descricaoItem || 'Nenhum candidato encontrado'}</td>
+      <td style="text-align: center;">${confiancaHtml}</td>
+      <td style="text-align: center; white-space: nowrap;">
+        ${linha.codigoItem ? '<button type="button" class="btn-link-success catmat-revisao-aprovar" title="Aprovar">✓ Aprovar</button>' : ''}
+        <button type="button" class="btn-link-warning catmat-revisao-trocar" title="Trocar" style="margin-left: 0.5rem;">✎ Trocar</button>
+        <button type="button" class="btn-link-danger catmat-revisao-sem-correspondencia" title="Sem correspondência" style="margin-left: 0.5rem;">⨯ Sem correspondência</button>
+      </td>
+    `;
+
+    if (linha.codigoItem) {
+      tr.querySelector('.catmat-revisao-aprovar').addEventListener('click', () => handleAprovarCatmatMapeamento(linha));
+    }
+    tr.querySelector('.catmat-revisao-trocar').addEventListener('click', () => abrirTrocarCatmatModal(linha));
+    tr.querySelector('.catmat-revisao-sem-correspondencia').addEventListener('click', () => handleSemCorrespondenciaCatmatMapeamento(linha));
+
+    tbody.appendChild(tr);
+  });
+}
+
+/**
+ * Pega a senha digitada no card "Gerar sugestões" — reaproveitada pelas
+ * ações da fila de revisão (Aprovar/Trocar/Sem correspondência) pra não
+ * pedir a senha nem mais uma vez pra cada um dos itens da fila.
+ */
+function obterSenhaCatmatSessao() {
+  const senha = document.getElementById('catmatGeracaoSenha').value;
+  if (!senha) {
+    showToast("Informe a senha da Diretoria no campo do topo da página primeiro.", "warning");
+    return null;
+  }
+  return senha;
+}
+
+async function handleAprovarCatmatMapeamento(linha) {
+  const senha = obterSenhaCatmatSessao();
+  if (!senha) return;
+
+  try {
+    const resData = await callCatmatMapeamentoSalvar({
+      estoqueId: linha.estoqueId,
+      produto: linha.produto,
+      codigoGrupo: linha.codigoGrupo,
+      nomeGrupo: linha.nomeGrupo,
+      codigoClasse: linha.codigoClasse,
+      nomeClasse: linha.nomeClasse,
+      codigoPdm: linha.codigoPdm,
+      nomePdm: linha.nomePdm,
+      codigoItem: linha.codigoItem,
+      descricaoItem: linha.descricaoItem,
+      score: linha.score,
+      status: 'aprovado',
+      senha
+    });
+    if (!resData || resData.status !== 'success') {
+      throw new Error(resData.message || 'Erro ao aprovar.');
+    }
+    showToast("Aprovado!", "success");
+    await carregarFilaRevisaoCatmat();
+  } catch (error) {
+    console.error("Erro ao aprovar mapeamento CATMAT:", error);
+    showToast(error.message || "Erro ao aprovar. Tente novamente.", "error");
+  }
+}
+
+async function handleSemCorrespondenciaCatmatMapeamento(linha) {
+  const senha = obterSenhaCatmatSessao();
+  if (!senha) return;
+
+  try {
+    const resData = await callCatmatMapeamentoSalvar({
+      estoqueId: linha.estoqueId,
+      produto: linha.produto,
+      status: 'sem_correspondencia',
+      senha
+    });
+    if (!resData || resData.status !== 'success') {
+      throw new Error(resData.message || 'Erro ao marcar como sem correspondência.');
+    }
+    showToast("Marcado como sem correspondência.", "success");
+    await carregarFilaRevisaoCatmat();
+  } catch (error) {
+    console.error("Erro ao marcar mapeamento CATMAT como sem correspondência:", error);
+    showToast(error.message || "Erro ao salvar. Tente novamente.", "error");
+  }
+}
+
+// --- Modal "Trocar" (escolha manual: PDM -> Item) ---
+//
+// Reaproveitado em 2 lugares: a fila de revisão do Mapeamento CATMAT (senha
+// da sessão da própria página, recarrega a fila ao concluir) e o lápis
+// "Editar Produto" da Consulta de Estoque (senha já digitada no próprio
+// modal de edição, recarrega só o box de informações CATMAT). `opcoes`
+// deixa cada chamador dizer de onde vem a senha e o que fazer ao concluir.
+
+let catmatTrocarLinhaAtual = null;
+let catmatTrocarPdmEscolhido = null;
+let catmatTrocarItensCatmat = [];
+let catmatTrocarObterSenha = obterSenhaCatmatSessao;
+let catmatTrocarAoConcluir = carregarFilaRevisaoCatmat;
+// Termo usado nas buscas (PDM e, dentro dele, item) — começa igual ao nome
+// do produto no Estoque, mas pode ser reescrito na etapa de PDM (campo
+// "Buscar com outro termo") pra melhorar a precisão quando o nome
+// cadastrado é vago ou abreviado demais pro casamento automático.
+let catmatTrocarTermoBusca = '';
+// Quando true, a escolha final NÃO é salva no banco (catmat_mapeamento_salvar
+// exige um estoque_id real) — usado pra itens de "Gerar lista própria para
+// ATA" que vieram do PDF mas não têm correspondência nenhuma no Estoque.
+// Nesse caso `aoConcluir` recebe o objeto escolhido direto (em vez de
+// recarregar do banco) pra quem chamou guardar só na memória do fluxo.
+let catmatTrocarSalvarLocal = false;
+
+function abrirTrocarCatmatModal(linha, opcoes) {
+  catmatTrocarLinhaAtual = linha;
+  catmatTrocarPdmEscolhido = null;
+  catmatTrocarItensCatmat = [];
+  catmatTrocarTermoBusca = linha.produto;
+  catmatTrocarObterSenha = (opcoes && opcoes.obterSenha) || obterSenhaCatmatSessao;
+  catmatTrocarAoConcluir = (opcoes && opcoes.aoConcluir) || carregarFilaRevisaoCatmat;
+  catmatTrocarSalvarLocal = !!(opcoes && opcoes.salvarLocal);
+  document.getElementById('catmatTrocarTitulo').textContent = `Trocar casamento — ${linha.produto}`;
+  document.getElementById('catmatTrocarModal').classList.remove('hidden');
+  buscarEtapaPdmTrocar();
+}
+
+/** Busca os PDMs parecidos com catmatTrocarTermoBusca (editável) e redesenha a etapa 1. */
+function buscarEtapaPdmTrocar() {
+  renderTrocarCatmatCarregando();
+  buscarPdmsParecidos(catmatTrocarTermoBusca).then(renderTrocarCatmatEtapaPdm);
+}
+
+function fecharTrocarCatmatModal() {
+  document.getElementById('catmatTrocarModal').classList.add('hidden');
+  catmatTrocarLinhaAtual = null;
+}
+
+function renderTrocarCatmatCarregando() {
+  document.getElementById('catmatTrocarConteudo').innerHTML = '<p style="color: var(--text-secondary);">Buscando candidatos...</p>';
+}
+
+function renderTrocarCatmatEtapaPdm(candidatos) {
+  const conteudo = document.getElementById('catmatTrocarConteudo');
+  conteudo.innerHTML = '';
+
+  const intro = document.createElement('p');
+  intro.style.cssText = 'color: var(--text-secondary); margin-bottom: 1rem;';
+  intro.textContent = 'Escolha a família de material (PDM) mais parecida:';
+  conteudo.appendChild(intro);
+
+  const buscaGroup = document.createElement('div');
+  buscaGroup.className = 'filter-group';
+  buscaGroup.style.marginBottom = '1rem';
+  buscaGroup.innerHTML = `
+    <label for="catmatTrocarTermoInput">Buscar com outro termo (melhora a precisão quando o nome do produto é vago)</label>
+    <div style="display: flex; gap: 0.5rem;">
+      <input type="text" id="catmatTrocarTermoInput" value="${catmatTrocarTermoBusca}" style="flex: 1;">
+      <button type="button" id="btnCatmatTrocarBuscarNovamente" class="btn btn-secondary">Buscar</button>
+    </div>
+  `;
+  conteudo.appendChild(buscaGroup);
+  const inputTermo = buscaGroup.querySelector('#catmatTrocarTermoInput');
+  const refazerBusca = () => {
+    const termo = inputTermo.value.trim();
+    if (!termo) {
+      showToast("Informe um termo pra buscar.", "warning");
+      return;
+    }
+    catmatTrocarTermoBusca = termo;
+    buscarEtapaPdmTrocar();
+  };
+  buscaGroup.querySelector('#btnCatmatTrocarBuscarNovamente').addEventListener('click', refazerBusca);
+  inputTermo.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); refazerBusca(); }
+  });
+
+  const lista = document.createElement('div');
+  lista.className = 'liberacao-items-list';
+  lista.style.maxHeight = '320px';
+
+  if (candidatos.length === 0) {
+    lista.innerHTML = '<p style="color: var(--text-secondary);">Nenhuma família de material parecida foi encontrada.</p>';
+  } else {
+    candidatos.forEach(pdm => {
+      const row = document.createElement('div');
+      row.className = 'pedido-obtencao-item-row catmat-candidato-row';
+      row.innerHTML = `
+        <div style="flex: 1;">
+          <div class="pedido-obtencao-item-name">${pdm.nomePdm}</div>
+          <div class="pedido-obtencao-item-meta">${pdm.nomeGrupo || ''}${pdm.nomeClasse ? ' › ' + pdm.nomeClasse : ''}</div>
+        </div>
+        <span class="catmat-score-badge">${Math.round(pdm.score * 100)}%</span>
+      `;
+      row.addEventListener('click', () => handleEscolherPdmTrocar(pdm));
+      lista.appendChild(row);
+    });
+  }
+
+  conteudo.appendChild(lista);
+
+  const nav = document.createElement('div');
+  nav.className = 'form-actions';
+  nav.style.marginTop = '1.5rem';
+  const btnCancelar = document.createElement('button');
+  btnCancelar.type = 'button';
+  btnCancelar.className = 'btn btn-secondary';
+  btnCancelar.textContent = 'Cancelar';
+  btnCancelar.addEventListener('click', fecharTrocarCatmatModal);
+  nav.appendChild(btnCancelar);
+  conteudo.appendChild(nav);
+}
+
+async function handleEscolherPdmTrocar(pdm) {
+  catmatTrocarPdmEscolhido = pdm;
+  renderTrocarCatmatCarregando();
+
+  try {
+    const itensDoPdm = await buscarItensCatmatDoPdm(pdm.codigoPdm);
+    catmatTrocarItensCatmat = itensDoPdm;
+    const candidatos = buscarItensParecidosNoPdm(catmatTrocarTermoBusca, itensDoPdm);
+    renderTrocarCatmatEtapaItem(candidatos);
+  } catch (error) {
+    console.error("Erro ao buscar itens do CATMAT (Trocar):", error);
+    document.getElementById('catmatTrocarConteudo').innerHTML = `<p style="color: var(--color-danger);">Erro ao consultar os itens dessa família: ${error.message}</p>`;
+  }
+}
+
+function renderTrocarCatmatEtapaItem(candidatos) {
+  const conteudo = document.getElementById('catmatTrocarConteudo');
+  conteudo.innerHTML = '';
+
+  const intro = document.createElement('p');
+  intro.style.cssText = 'color: var(--text-secondary); margin-bottom: 1rem;';
+  intro.textContent = `Família escolhida: ${catmatTrocarPdmEscolhido.nomePdm}. Agora escolha o item:`;
+  conteudo.appendChild(intro);
+
+  const lista = document.createElement('div');
+  lista.className = 'liberacao-items-list';
+  lista.style.maxHeight = '320px';
+
+  if (candidatos.length === 0) {
+    lista.innerHTML = '<p style="color: var(--text-secondary);">Nenhum item foi encontrado nessa família.</p>';
+  } else {
+    candidatos.forEach(it => {
+      const row = document.createElement('div');
+      row.className = 'pedido-obtencao-item-row catmat-candidato-row';
+      row.innerHTML = `
+        <div style="flex: 1;">
+          <div class="pedido-obtencao-item-name">${it.descricaoItem}</div>
+          <div class="pedido-obtencao-item-meta">CATMAT ${it.codigoItem}</div>
+        </div>
+        <span class="catmat-score-badge">${Math.round(it.score * 100)}%</span>
+      `;
+      row.addEventListener('click', () => handleEscolherItemTrocar(it));
+      lista.appendChild(row);
+    });
+  }
+
+  conteudo.appendChild(lista);
+
+  const nav = document.createElement('div');
+  nav.className = 'form-actions';
+  nav.style.marginTop = '1.5rem';
+  const btnVoltar = document.createElement('button');
+  btnVoltar.type = 'button';
+  btnVoltar.className = 'btn btn-secondary';
+  btnVoltar.textContent = 'Voltar';
+  btnVoltar.addEventListener('click', buscarEtapaPdmTrocar);
+  nav.appendChild(btnVoltar);
+  const btnCancelar = document.createElement('button');
+  btnCancelar.type = 'button';
+  btnCancelar.className = 'btn btn-secondary';
+  btnCancelar.textContent = 'Cancelar';
+  btnCancelar.addEventListener('click', fecharTrocarCatmatModal);
+  nav.appendChild(btnCancelar);
+  conteudo.appendChild(nav);
+}
+
+async function handleEscolherItemTrocar(it) {
+  const linha = catmatTrocarLinhaAtual;
+  const pdm = catmatTrocarPdmEscolhido;
+  const aoConcluir = catmatTrocarAoConcluir;
+
+  if (catmatTrocarSalvarLocal) {
+    // Item sem estoque_id (veio de "Gerar lista própria para ATA" e não
+    // tinha correspondência no Estoque) — não dá pra gravar em
+    // catmat_mapeamento_salvar (exige estoque_id real), então a escolha
+    // fica só na memória do fluxo; quem chamou decide o que fazer com ela.
+    fecharTrocarCatmatModal();
+    showToast("Casamento escolhido!", "success");
+    aoConcluir({
+      codigoGrupo: pdm.codigoGrupo,
+      nomeGrupo: pdm.nomeGrupo,
+      codigoClasse: pdm.codigoClasse,
+      nomeClasse: pdm.nomeClasse,
+      codigoPdm: pdm.codigoPdm,
+      nomePdm: pdm.nomePdm,
+      codigoItem: it.codigoItem,
+      descricaoItem: it.descricaoItem,
+      score: it.score,
+      status: 'aprovado'
+    });
+    return;
+  }
+
+  const senha = catmatTrocarObterSenha();
+  if (!senha) return;
+
+  try {
+    const resData = await callCatmatMapeamentoSalvar({
+      estoqueId: linha.estoqueId,
+      produto: linha.produto,
+      codigoGrupo: pdm.codigoGrupo,
+      nomeGrupo: pdm.nomeGrupo,
+      codigoClasse: pdm.codigoClasse,
+      nomeClasse: pdm.nomeClasse,
+      codigoPdm: pdm.codigoPdm,
+      nomePdm: pdm.nomePdm,
+      codigoItem: it.codigoItem,
+      descricaoItem: it.descricaoItem,
+      score: it.score,
+      status: 'aprovado',
+      senha
+    });
+    if (!resData || resData.status !== 'success') {
+      throw new Error(resData.message || 'Erro ao salvar a troca.');
+    }
+    showToast("Casamento atualizado e aprovado!", "success");
+    fecharTrocarCatmatModal();
+    await aoConcluir();
+  } catch (error) {
+    console.error("Erro ao salvar troca do Mapeamento CATMAT:", error);
+    showToast(error.message || "Erro ao salvar. Tente novamente.", "error");
+  }
 }
 
 let editarPontoPedidoItemAtual = null;
@@ -4085,41 +5222,45 @@ async function fetchDemandaData() {
  * "vermelho" (em QUALQUER categoria, não só a filtrada na tela) com os
  * dados de fornecedor da aba "Demanda", casando pelo nome do produto.
  */
-async function abrirPedidoObtencaoModal() {
-  if (stockLevelsFetchPromise) {
-    await stockLevelsFetchPromise;
-  }
-
-  showLoading(true);
-  await fetchDemandaData();
-  showLoading(false);
-
-  const redItems = stockData.filter(item => getPontoPedidoStatus(item.total, item.pontoPedido) === 'vermelho');
-
-  if (redItems.length === 0) {
-    showToast("Nenhum produto atingiu o Ponto de Pedido no momento.", "success");
-    return;
-  }
-
-  abrirPedidoObtencaoModalComItens(redItems);
-}
-
 /**
  * Miolo de abrirPedidoObtencaoModal, extraído pra poder ser chamado também
  * pelo botão GERAR da tela Ponto de Compra (ATA = Sim) — ambos os pontos de
  * entrada só diferem na lista de produtos que alimenta o modal; o modal, a
  * validação e a geração do PDF/e-mail são exatamente os mesmos de sempre.
  * `items` é uma lista de produtos do Estoque (formato de stockData).
+ *
+ * `opcoes.usarDescricaoCatmat` (só ligado pelo GERAR de ATA = Sim): busca o
+ * Mapeamento CATMAT de cada item e, quando houver uma correspondência
+ * (status diferente de 'sem_correspondencia'), usa a descrição oficial do
+ * CATMAT no PDF em vez da descrição do fornecedor da aba Demanda — já que
+ * agora que o mapeamento existe pra quase todo o Estoque, essa é a
+ * descrição que deve ir pro documento de licitação/SRP.
  */
-function abrirPedidoObtencaoModalComItens(items) {
+async function abrirPedidoObtencaoModalComItens(items, opcoes) {
+  let catmatPorEstoqueId = null;
+  if (opcoes && opcoes.usarDescricaoCatmat) {
+    showLoading(true);
+    try {
+      const mapeamento = await carregarMapeamentoCatmatCompleto();
+      catmatPorEstoqueId = new Map(mapeamento.map(m => [m.estoqueId, m]));
+    } catch (error) {
+      console.error("Erro ao buscar Mapeamento CATMAT para o Pedido de Obtenção:", error);
+    } finally {
+      showLoading(false);
+    }
+  }
+
   pedidoObtencaoItems = items
     .map(item => {
       const demanda = demandaData.find(d => d.material.toLowerCase() === item.produto.toLowerCase()) || null;
+      const catmat = catmatPorEstoqueId ? catmatPorEstoqueId.get(item.id) : null;
+      const descricaoCatmat = (catmat && catmat.status !== 'sem_correspondencia' && catmat.descricaoItem) ? catmat.descricaoItem : null;
       return {
         produto: item.produto,
         estoqueAtual: item.total,
         pontoPedido: item.pontoPedido,
         demanda: demanda,
+        descricaoCatmat,
         selecionado: !!demanda
       };
     })
@@ -4159,6 +5300,9 @@ function renderPedidoObtencaoItemsList() {
     let metaHtml = `Estoque atual: ${formatDataLabelValue(item.estoqueAtual)} · Ponto de Pedido: ${formatDataLabelValue(item.pontoPedido)}`;
     if (item.demanda) {
       metaHtml += ` · Fornecedor: ${item.demanda.descricaoFornecedor || '—'}`;
+    }
+    if (item.descricaoCatmat) {
+      metaHtml += ` · <strong>Descrição no documento (CATMAT):</strong> ${item.descricaoCatmat}`;
     }
     info.innerHTML = `
       <div class="pedido-obtencao-item-name">${item.produto}</div>
@@ -4266,7 +5410,7 @@ function gerarPedidoObtencaoDoc(itensSelecionados, numero) {
     totalGeral += total;
     return [
       String(i + 1),
-      d.descricaoFornecedor || item.produto,
+      item.descricaoCatmat || d.descricaoFornecedor || item.produto,
       d.unidade || '',
       formatDataLabelValue(qtd),
       formatCurrencyBRL(d.valorUnitario || 0),
@@ -4450,6 +5594,229 @@ function handleBaixarPedidoObtencaoPDF() {
   const { doc } = gerarPedidoObtencaoDoc(validado.itensSelecionados, validado.numero);
   const numeroSeguro = validado.numero.replace(/[^a-zA-Z0-9]+/g, '_');
   doc.save(`Pedido_de_Obtencao_${numeroSeguro}.pdf`);
+}
+
+/** Dispara o download de um Blob no navegador — mesmo padrão pra qualquer arquivo gerado no cliente (PDF já usa doc.save do jsPDF; .docx não tem equivalente, então é feito manualmente aqui). */
+function baixarBlobComoArquivo(blob, nomeArquivo) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = nomeArquivo;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Monta o mesmo Pedido de Obtenção da BFLa (gerarPedidoObtencaoDoc, acima),
+ * só que como um .docx editável no Word em vez de um PDF — pedido explícito
+ * pra poder ajustar o texto fixo (datas, nomes, justificativas) sem
+ * depender de programação. Usa a biblioteca docx (window.docx, carregada
+ * via CDN no index.html), que gera o arquivo 100% no navegador.
+ */
+async function gerarPedidoObtencaoDocx(itensSelecionados, numero) {
+  const {
+    Document, Paragraph, TextRun, Table, TableRow, TableCell, AlignmentType,
+    WidthType, BorderStyle, VerticalAlign, Footer, Packer, PageBreak, convertMillimetersToTwip
+  } = docx;
+
+  const anoAtual = new Date().getFullYear();
+  const bordaFina = { style: BorderStyle.SINGLE, size: 2, color: '999999' };
+  const bordasTabela = { top: bordaFina, bottom: bordaFina, left: bordaFina, right: bordaFina, insideHorizontal: bordaFina, insideVertical: bordaFina };
+
+  function textoCentrado(texto, { bold = false, size = 19 } = {}) {
+    return new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 80 }, children: [new TextRun({ text: texto, bold, size })] });
+  }
+
+  function textoNormal(texto, { bold = false, size = 19, alignment = AlignmentType.LEFT } = {}) {
+    return new Paragraph({ alignment, spacing: { after: 100 }, children: [new TextRun({ text: texto, bold, size })] });
+  }
+
+  function linhaCheckbox(texto) {
+    return textoNormal(`☐  ${texto}`);
+  }
+
+  function linhaData() {
+    return textoNormal(`Data:____/_____/${anoAtual}.`, { alignment: AlignmentType.RIGHT });
+  }
+
+  function blocoAssinatura(linhas) {
+    return [
+      textoCentrado('_______________________________'),
+      ...linhas.map((l, i) => textoCentrado(l.texto, { bold: !!l.bold })),
+    ];
+  }
+
+  function celula(texto, { header = false, align = AlignmentType.LEFT, width } = {}) {
+    return new TableCell({
+      width: width ? { size: width, type: WidthType.PERCENTAGE } : undefined,
+      shading: header ? { fill: '2563EB' } : undefined,
+      verticalAlign: VerticalAlign.CENTER,
+      children: [new Paragraph({
+        alignment: align,
+        children: [new TextRun({ text: String(texto ?? ''), bold: header, color: header ? 'FFFFFF' : undefined, size: 17 })]
+      })]
+    });
+  }
+
+  // ===== Tabela da seção 2 (DESCRIÇÃO DOS MATERIAIS/SERVIÇOS) =====
+  let totalGeral = 0;
+  const linhasTabela = itensSelecionados.map((item, i) => {
+    const d = item.demanda;
+    const qtd = (d.qtdMinima || 0) * (d.multiplicador || 0);
+    const total = qtd * (d.valorUnitario || 0);
+    totalGeral += total;
+    const descricao = item.descricaoCatmat || d.descricaoFornecedor || item.produto;
+    return new TableRow({
+      children: [
+        celula(String(i + 1), { align: AlignmentType.CENTER, width: 6 }),
+        celula(descricao, { width: 42 }),
+        celula(d.unidade || '', { align: AlignmentType.CENTER, width: 8 }),
+        celula(formatDataLabelValue(qtd), { align: AlignmentType.CENTER, width: 12 }),
+        celula(formatCurrencyBRL(d.valorUnitario || 0), { align: AlignmentType.RIGHT, width: 16 }),
+        celula(formatCurrencyBRL(total), { align: AlignmentType.RIGHT, width: 16 })
+      ]
+    });
+  });
+
+  const tabelaMateriais = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: bordasTabela,
+    rows: [
+      new TableRow({
+        tableHeader: true,
+        children: ['ITEM', 'DESCRIÇÃO', 'UF', 'QTD', 'VALOR (UN)', 'TOTAL'].map((t, i) =>
+          celula(t, { header: true, align: i === 1 ? AlignmentType.LEFT : AlignmentType.CENTER, width: [6, 42, 8, 12, 16, 16][i] })
+        )
+      }),
+      ...linhasTabela,
+      new TableRow({
+        children: [
+          celula('', { width: 6 }), celula('', { width: 42 }), celula('', { width: 8 }), celula('', { width: 12 }),
+          celula('TOTAL', { align: AlignmentType.RIGHT, width: 16 }),
+          celula(formatCurrencyBRL(totalGeral), { align: AlignmentType.RIGHT, width: 16 })
+        ]
+      })
+    ]
+  });
+
+  // ===== Tabela da seção 5 (DISPONIBILIDADE DE RECURSOS) =====
+  const tabelaRecursos = new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: bordasTabela,
+    rows: [
+      new TableRow({
+        tableHeader: true,
+        children: ['Gestão', 'Fonte', 'Prog. Trab.', 'E.D DISP.', 'E.D APLIC.', 'PI'].map(t =>
+          celula(t, { header: true, align: AlignmentType.CENTER, width: 100 / 6 })
+        )
+      }),
+      new TableRow({
+        children: ['7', '', '', '', '', ''].map(t => celula(t, { align: AlignmentType.CENTER, width: 100 / 6 }))
+      })
+    ]
+  });
+
+  const rodape = (texto) => new Footer({
+    children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: texto, size: 15, color: '666666' })] })]
+  });
+
+  const margemPagina = {
+    top: convertMillimetersToTwip(15), bottom: convertMillimetersToTwip(15),
+    left: convertMillimetersToTwip(14), right: convertMillimetersToTwip(14)
+  };
+
+  const doc = new Document({
+    sections: [
+      // ===== PÁGINA 1 =====
+      {
+        properties: { page: { margin: margemPagina } },
+        footers: { default: rodape('1 - 3') },
+        children: [
+          textoCentrado('MARINHA DO BRASIL', { bold: true, size: 24 }),
+          textoCentrado('BASE FLUVIAL DE LADÁRIO', { bold: true, size: 20 }),
+          textoCentrado(`Pedido de Obtenção n° ${numero}`, { bold: true, size: 22 }),
+          textoNormal('1. CONTRATAÇÃO (MATERIAL/SERVIÇO)', { bold: true }),
+          textoNormal('JUSTIFICATIVA/APLICAÇÃO: Aquisição de material para o almoxarifado da BFLa.'),
+          textoNormal('2. DESCRIÇÃO DOS MATERIAIS/SERVIÇOS E CUSTO ESTIMADO', { bold: true }),
+          tabelaMateriais,
+          textoNormal('3. LICITADO', { bold: true }),
+          linhaCheckbox('SIM: Pregão Eletrônico ____________________'),
+          linhaCheckbox('NÃO:'),
+          linhaData(),
+          ...blocoAssinatura([{ texto: 'ASSINATURA E CARIMBO DO RESPONSÁVEL' }, { texto: 'SETOR REQUISITANTE' }]),
+          ...blocoAssinatura([{ texto: 'ASSINATURA E CARIMBO DO RESPONSÁVEL' }, { texto: 'DIVISÃO DE OBTENÇÃO' }]),
+          textoNormal('Enquadramento: (Somente nas hipóteses de dispensa/inexigibilidade)')
+        ]
+      },
+      // ===== PÁGINA 2 =====
+      {
+        properties: { page: { margin: margemPagina } },
+        footers: { default: rodape('2 - 3') },
+        children: [
+          textoNormal('4. ESTOQUE (SOMENTE EM CASO DE MATERIAIS)', { bold: true }),
+          linhaCheckbox('SIM – Justificativa: ________________________________________________'),
+          linhaCheckbox('NÃO'),
+          linhaData(),
+          ...blocoAssinatura([{ texto: 'ASSINATURA E CARIMBO DO RESPONSÁVEL' }, { texto: 'DIVISÃO DE MATERIAL' }]),
+          textoNormal('5. DISPONIBILIDADE DE RECURSOS', { bold: true }),
+          tabelaRecursos,
+          linhaCheckbox('NÃO: ___________________________________________________________'),
+          linhaData(),
+          ...blocoAssinatura([{ texto: 'ALLEX CAMPOS CARDIANO', bold: true }, { texto: 'Capitão-Tenente (IM)' }, { texto: 'Agente Financeiro' }]),
+          textoNormal('Ratificação:', { bold: true }),
+          linhaData(),
+          ...blocoAssinatura([{ texto: 'JOÃO PAULO DE TARSO FERREIRA', bold: true }, { texto: 'Capitão de Fragata' }, { texto: 'Agente Fiscal' }]),
+          textoNormal('6. AUTORIZAÇÃO', { bold: true }),
+          linhaCheckbox('DISPENSA ELETRÔNICA'),
+          linhaCheckbox('LICITAR/ADERIR (ARP)'),
+          linhaCheckbox('OUTRAS HIPÓTESES:___________________'),
+          linhaCheckbox('CONFECCIONAR SOLEMP (Itens licitados)'),
+          linhaCheckbox('NÃO AUTORIZO'),
+          textoNormal('Despacho:', { bold: true }),
+          linhaCheckbox('Determino a Seção de Finanças reservar o recurso (item 5) para custear a demanda apresentada.'),
+          linhaData(),
+          textoCentrado('________________________________')
+        ]
+      },
+      // ===== PÁGINA 3 =====
+      {
+        properties: { page: { margin: margemPagina } },
+        footers: { default: rodape('3 - 3') },
+        children: [
+          textoCentrado('LEONARDO ASSÁ GALLEGO SOARES', { bold: true, size: 20 }),
+          textoCentrado('Capitão de Mar e Guerra (EN)'),
+          textoCentrado('Comandante'),
+          textoNormal('7. RESERVA DE RECURSOS', { bold: true }),
+          textoNormal('Após determinação do Ordenador de Despesas o recurso será reservado conforme dados constantes no item 5.'),
+          linhaData(),
+          ...blocoAssinatura([{ texto: 'ALLEX CAMPOS CARDIANO', bold: true }, { texto: 'Capitão-Tenente (IM)' }, { texto: 'Agente Financeiro' }])
+        ]
+      }
+    ]
+  });
+
+  const blob = await Packer.toBlob(doc);
+  return { blob, totalGeral };
+}
+
+async function handleBaixarPedidoObtencaoDocx() {
+  const validado = validarESelecionarItensPedidoObtencao();
+  if (!validado) return;
+
+  const btn = document.getElementById('btnBaixarPedidoObtencaoDocx');
+  setButtonProcessing(btn, 'Gerando...');
+  try {
+    const { blob } = await gerarPedidoObtencaoDocx(validado.itensSelecionados, validado.numero);
+    const numeroSeguro = validado.numero.replace(/[^a-zA-Z0-9]+/g, '_');
+    baixarBlobComoArquivo(blob, `Pedido_de_Obtencao_${numeroSeguro}.docx`);
+  } catch (error) {
+    console.error("Erro ao gerar o .docx do Pedido de Obtenção:", error);
+    showToast("Erro ao gerar o documento Word. Tente novamente.", "error");
+  } finally {
+    clearButtonProcessing(btn);
+  }
 }
 
 async function handleEnviarPedidoObtencaoEmail() {
@@ -5773,6 +7140,7 @@ function initEventListeners() {
   document.getElementById('menuEstoque').addEventListener('click', () => switchTab('estoque'));
   document.getElementById('menuLiberacao').addEventListener('click', () => switchTab('liberacao'));
   document.getElementById('menuPontoPedido').addEventListener('click', () => switchTab('pontopedido'));
+  document.getElementById('menuCatmatMapeamento').addEventListener('click', () => switchTab('catmatmapeamento'));
 
   // Botão de Sair: revoga o acesso liberado neste navegador e volta para a tela de senha
   document.getElementById('btnLogout').addEventListener('click', handleLogout);
@@ -5886,6 +7254,7 @@ function applyRoleRestrictions() {
   document.getElementById('menuRetirada').closest('li').classList.toggle('hidden', isVisitor);
   document.getElementById('menuEntrada').closest('li').classList.toggle('hidden', isVisitor);
   document.getElementById('menuPontoPedido').closest('li').classList.toggle('hidden', isVisitor);
+  document.getElementById('menuCatmatMapeamento').closest('li').classList.toggle('hidden', isVisitor);
 
   const consumoSection = document.getElementById('consumoLimiteSetorSection');
   if (consumoSection) {
@@ -5919,6 +7288,7 @@ function initApp() {
   initializeEstoqueModule();
   initializeLiberacaoModule();
   initializePontoPedidoModule();
+  initializeCatmatMapeamentoModule();
   initSidebarToggle();
   fetchDashboardData();
 }

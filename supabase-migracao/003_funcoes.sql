@@ -419,8 +419,8 @@ $$;
 
 -- =====================================================================
 -- estoque_editar: edição direta de um produto do Estoque (nome, unidade,
--- quantidade, categoria e se está numa ATA de Registro de Preços — NÃO
--- mexe em Ponto de Pedido, que mora só na aba Demanda, ver
+-- quantidade, categoria, se está numa ATA de Registro de Preços e o preço
+-- dessa ATA — NÃO mexe em Ponto de Pedido, que mora só na aba Demanda, ver
 -- demanda_editar_ponto_pedido abaixo) — criada pra Fase 2 porque, uma vez
 -- em produção no Supabase, não dá mais pra abrir a planilha e editar a
 -- célula na mão. Diferente de retirar_material/registrar_entrada, esta
@@ -428,11 +428,15 @@ $$;
 -- mesma senha da Diretoria usada em liberacao_registrar_retirada, e não
 -- deixa renomear um produto para um nome que já existe em outra linha
 -- (mesma regra do índice único por nome, só que com uma mensagem amigável
--- em vez de estourar a constraint).
+-- em vez de estourar a constraint). O preço de ATA é independente do
+-- campo `ata` (sim/não) — pode ser preenchido pra qualquer item.
 -- =====================================================================
+alter table estoque add column if not exists preco_ata numeric;
+
 drop function if exists estoque_editar(bigint, text, text, numeric, text);
 drop function if exists estoque_editar(bigint, text, text, numeric, numeric, text);
 drop function if exists estoque_editar(bigint, text, text, numeric, boolean, text);
+drop function if exists estoque_editar(bigint, text, text, numeric, text, boolean, text);
 
 create or replace function estoque_editar(
   p_id bigint,
@@ -441,6 +445,7 @@ create or replace function estoque_editar(
   p_saldo numeric,
   p_categoria text,
   p_ata boolean,
+  p_preco_ata numeric,
   p_senha text
 ) returns estoque
 language plpgsql
@@ -461,6 +466,9 @@ begin
   if p_saldo is null or p_saldo < 0 then
     raise exception 'A quantidade em estoque não pode ser negativa.';
   end if;
+  if p_preco_ata is not null and p_preco_ata < 0 then
+    raise exception 'O preço de ATA não pode ser negativo.';
+  end if;
 
   select * into v_row from estoque where id = p_id for update;
   if not found then
@@ -477,6 +485,7 @@ begin
         saldo = p_saldo,
         categoria = nullif(trim(coalesce(p_categoria, '')), ''),
         ata = p_ata,
+        preco_ata = p_preco_ata,
         updated_at = now()
     where id = p_id
     returning * into v_row;
@@ -590,6 +599,146 @@ end;
 $$;
 
 -- =====================================================================
+-- estoque_pesquisa_precos: até 3 preços de referência (Pesquisa de
+-- Preços do Compras.gov) escolhidos manualmente por produto, junto com a
+-- unidade de medida e as quantidades mín./máx./total a adquirir — etapa
+-- "B" do fluxo de Ponto de Compra com ATA = Não (ver Etapa A, que já usa
+-- o Mapeamento CATMAT pra descrição/CATMAT, em
+-- 005_catmat_mapeamento.sql). Os preços ficam guardados aqui pra uso
+-- futuro — não entram na Manifestação de Interesse (.docx) gerada ao
+-- final desse fluxo, que só usa descrição/CATMAT/unidade/quantidades.
+-- Mesmo padrão de upsert por estoque_id + senha da Diretoria de
+-- catmat_mapeamento_salvar, acima.
+-- =====================================================================
+create table if not exists estoque_pesquisa_precos (
+  id bigint generated always as identity primary key,
+  estoque_id bigint not null references estoque(id) on delete cascade,
+  produto text not null,
+  codigo_item integer,
+  descricao_item text,
+  unidade text,
+  qtd_minima numeric,
+  qtd_maxima numeric,
+  qtd_total numeric,
+  precos jsonb not null default '[]'::jsonb,
+  atualizado_em timestamptz not null default now()
+);
+create unique index if not exists estoque_pesquisa_precos_estoque_id_idx on estoque_pesquisa_precos (estoque_id);
+
+alter table estoque_pesquisa_precos enable row level security;
+drop policy if exists "leitura publica" on estoque_pesquisa_precos;
+create policy "leitura publica" on estoque_pesquisa_precos for select using (true);
+revoke insert, update, delete on estoque_pesquisa_precos from anon, authenticated;
+
+create or replace function estoque_pesquisa_precos_salvar(
+  p_estoque_id bigint,
+  p_produto text,
+  p_codigo_item integer,
+  p_descricao_item text,
+  p_unidade text,
+  p_qtd_minima numeric,
+  p_qtd_maxima numeric,
+  p_qtd_total numeric,
+  p_precos jsonb,
+  p_senha text
+) returns estoque_pesquisa_precos
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_diretoria_senha constant text := 'diretoria321';
+  v_row estoque_pesquisa_precos;
+begin
+  if p_senha is distinct from v_diretoria_senha then
+    raise exception 'Senha da Diretoria incorreta.';
+  end if;
+  if not exists (select 1 from estoque where id = p_estoque_id) then
+    raise exception 'Produto do Estoque não encontrado.';
+  end if;
+
+  insert into estoque_pesquisa_precos (
+    estoque_id, produto, codigo_item, descricao_item, unidade,
+    qtd_minima, qtd_maxima, qtd_total, precos, atualizado_em
+  )
+  values (
+    p_estoque_id, p_produto, p_codigo_item, p_descricao_item, p_unidade,
+    p_qtd_minima, p_qtd_maxima, p_qtd_total, coalesce(p_precos, '[]'::jsonb), now()
+  )
+  on conflict (estoque_id) do update
+    set produto = excluded.produto,
+        codigo_item = excluded.codigo_item,
+        descricao_item = excluded.descricao_item,
+        unidade = excluded.unidade,
+        qtd_minima = excluded.qtd_minima,
+        qtd_maxima = excluded.qtd_maxima,
+        qtd_total = excluded.qtd_total,
+        precos = excluded.precos,
+        atualizado_em = now()
+  returning * into v_row;
+
+  return v_row;
+end;
+$$;
+
+-- =====================================================================
+-- pontocompra_documentos_fixos: os 4 documentos padrão da licitação/SRP
+-- de uma categoria (hoje só Produto de limpeza) que NUNCA mudam de
+-- conteúdo entre uma geração e outra (ETP, Termo de Referência,
+-- Declaração de Planejamento Estratégico e Formalização de Demanda) —
+-- diferente da Manifestação de Interesse, que é montada na hora com os
+-- itens revisados. Gerados uma única vez (como .docx, mesma biblioteca
+-- usada no resto do Ponto de Compra) e guardados aqui em base64 pra
+-- ficarem sempre disponíveis pra download na Etapa C, sem precisar
+-- reconstruir nada. Mesmo padrão de leitura pública / escrita só via RPC
+-- com senha das demais tabelas.
+-- =====================================================================
+create table if not exists pontocompra_documentos_fixos (
+  id text primary key,
+  categoria text not null,
+  nome_arquivo text not null,
+  conteudo_base64 text not null,
+  atualizado_em timestamptz not null default now()
+);
+
+alter table pontocompra_documentos_fixos enable row level security;
+drop policy if exists "leitura publica" on pontocompra_documentos_fixos;
+create policy "leitura publica" on pontocompra_documentos_fixos for select using (true);
+revoke insert, update, delete on pontocompra_documentos_fixos from anon, authenticated;
+
+create or replace function pontocompra_documento_fixo_salvar(
+  p_id text,
+  p_categoria text,
+  p_nome_arquivo text,
+  p_conteudo_base64 text,
+  p_senha text
+) returns pontocompra_documentos_fixos
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_diretoria_senha constant text := 'diretoria321';
+  v_row pontocompra_documentos_fixos;
+begin
+  if p_senha is distinct from v_diretoria_senha then
+    raise exception 'Senha da Diretoria incorreta.';
+  end if;
+
+  insert into pontocompra_documentos_fixos (id, categoria, nome_arquivo, conteudo_base64, atualizado_em)
+  values (p_id, p_categoria, p_nome_arquivo, p_conteudo_base64, now())
+  on conflict (id) do update
+    set categoria = excluded.categoria,
+        nome_arquivo = excluded.nome_arquivo,
+        conteudo_base64 = excluded.conteudo_base64,
+        atualizado_em = now()
+  returning * into v_row;
+
+  return v_row;
+end;
+$$;
+
+-- =====================================================================
 -- Permissões: as 4 tabelas só aceitam leitura via RLS (002_rls.sql); toda
 -- escrita passa obrigatoriamente por uma destas funções.
 -- =====================================================================
@@ -600,6 +749,8 @@ grant execute on function liberacao_avancar(text, text, jsonb) to anon, authenti
 grant execute on function liberacao_recusar(text) to anon, authenticated;
 grant execute on function liberacao_excluir(text) to anon, authenticated;
 grant execute on function liberacao_registrar_retirada(text, text, text, text, numeric) to anon, authenticated;
-grant execute on function estoque_editar(bigint, text, text, numeric, text, boolean, text) to anon, authenticated;
+grant execute on function estoque_editar(bigint, text, text, numeric, text, boolean, numeric, text) to anon, authenticated;
 grant execute on function demanda_editar_ponto_pedido(text, numeric, text) to anon, authenticated;
 grant execute on function demanda_editar_fornecedor(text, text, text, numeric, numeric, text, text) to anon, authenticated;
+grant execute on function estoque_pesquisa_precos_salvar(bigint, text, integer, text, text, numeric, numeric, numeric, jsonb, text) to anon, authenticated;
+grant execute on function pontocompra_documento_fixo_salvar(text, text, text, text, text) to anon, authenticated;
