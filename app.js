@@ -1379,7 +1379,7 @@ function renderConsumoLimiteSetor() {
   tbody.innerHTML = '';
 
   if (!setor) {
-    tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Selecione um setor para consultar</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Selecione um setor para consultar</td></tr>`;
     return;
   }
 
@@ -1389,19 +1389,21 @@ function renderConsumoLimiteSetor() {
     .sort((a, b) => a.produto.localeCompare(b.produto));
 
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Nenhum consumo encontrado para este setor</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Nenhum consumo encontrado para este setor</td></tr>`;
     return;
   }
 
   rows.forEach(row => {
     const tr = document.createElement('tr');
     const limitReached = row.consumedThisMonth >= row.average;
+    const weeklyAverage = row.average / 4;
 
     tr.innerHTML = `
       <td style="font-weight: 600; color: var(--text-primary);">${row.produto}</td>
-      <td>${formatDataLabelValue(row.average)}</td>
-      <td>${formatDataLabelValue(row.consumedThisMonth)}</td>
-      <td style="font-weight: 600; color: ${limitReached ? 'var(--color-danger)' : 'var(--color-success)'};">${formatDataLabelValue(row.remaining)}</td>
+      <td style="text-align: center;">${formatDataLabelValue(row.average)}</td>
+      <td style="text-align: center;">${formatDataLabelValue(weeklyAverage)}</td>
+      <td style="text-align: center;">${formatDataLabelValue(row.consumedThisMonth)}</td>
+      <td style="text-align: center; font-weight: 600; color: ${limitReached ? 'var(--color-danger)' : 'var(--color-success)'};">${formatDataLabelValue(row.remaining)}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -1443,15 +1445,17 @@ function exportConsumoLimiteSetorPDF() {
   const tableBody = rows.map(row => [
     row.produto,
     formatDataLabelValue(row.average),
+    formatDataLabelValue(row.average / 4),
     formatDataLabelValue(row.consumedThisMonth),
     formatDataLabelValue(row.remaining)
   ]);
 
   doc.autoTable({
     startY: 38,
-    head: [['Produto', 'Média Mensal (3 meses anteriores)', 'Retirado no Mês Atual', 'Disponível para Retirar']],
+    head: [['Produto', 'Média Mensal (3 meses anteriores)', 'Média Semanal', 'Retirado no Mês Atual', 'Disponível para Retirar']],
     body: tableBody,
-    styles: { font: 'helvetica', fontSize: 9, cellPadding: 3 },
+    styles: { font: 'helvetica', fontSize: 9, cellPadding: 3, halign: 'center' },
+    columnStyles: { 0: { halign: 'left' } },
     headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: 'bold' },
     alternateRowStyles: { fillColor: [248, 250, 252] }
   });
