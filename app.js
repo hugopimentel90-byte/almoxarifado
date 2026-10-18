@@ -3418,8 +3418,15 @@ function initializePontoPedidoModule() {
   document.getElementById('btnCancelarPontoCompraFinalizar').addEventListener('click', handleCancelarPontoCompraFinalizar);
   document.getElementById('btnBaixarManifestacaoInteresse').addEventListener('click', handleBaixarManifestacaoInteresse);
   document.getElementById('btnBaixarApendiceII').addEventListener('click', handleBaixarApendiceIIXlsx);
+  document.getElementById('btnBaixarPoEditavelAtaNao').addEventListener('click', handleBaixarPoEditavelAtaNao);
 
   document.getElementById('btnAbrirListaPropriaAta').addEventListener('click', abrirListaPropriaAtaModal);
+  document.getElementById('btnAbrirNovoProduto').addEventListener('click', abrirNovoProdutoModal);
+  document.getElementById('btnCancelarNovoProduto').addEventListener('click', fecharNovoProdutoModal);
+  document.getElementById('btnBuscarNovoProduto').addEventListener('click', handleBuscarNovoProduto);
+  document.getElementById('novoProdutoNome').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); handleBuscarNovoProduto(); }
+  });
   document.getElementById('btnCancelarListaPropriaAta').addEventListener('click', fecharListaPropriaAtaModal);
   document.getElementById('btnExtrairListaPropriaAta').addEventListener('click', handleExtrairListaPropriaAta);
   document.getElementById('btnCancelPedidoObtencao').addEventListener('click', fecharPedidoObtencaoModal);
@@ -3856,6 +3863,7 @@ let catmatFlowPrecosMarcados = [];    // índices (em catmatFlowPrecosDisponivei
 
 let catmatFlowItensFinais = []; // itens resolvidos na Etapa B, prontos pra entrar no docx
 let catmatFlowCategoria = ''; // categoria do filtro usado no GERAR — decide se os 4 documentos fixos aparecem na Etapa C
+let catmatFlowModoNovoProduto = false; // true = veio do botão "Novo Produto" (1 item avulso, fora do Estoque) — Etapa C mostra só o PO editável
 
 function mostrarPontoCompraScreen(screen) {
   document.getElementById('pontoCompraFiltrosSection').classList.toggle('hidden', screen !== 'filtros');
@@ -4030,7 +4038,124 @@ async function handleExtrairListaPropriaAta() {
   }
 }
 
+// =====================================================================
+// "Novo Produto" — ponto de entrada pra um ÚNICO item avulso, fora do
+// Estoque: a pessoa digita o nome, busca a classificação no CATMAT
+// (reaproveita o MESMO assistente PDM->Item do "Trocar", em modo local —
+// sem estoque_id, não grava nada em catmat_mapeamento_salvar) e segue pra
+// pesquisa de preço. No final (finalizarFluxoCatmat), só o PO editável
+// fica disponível — não faz sentido gerar Manifestação de Interesse,
+// Apêndice II nem os documentos fixos pra um item avulso fora de uma
+// ATA/SRP.
+// =====================================================================
+
+function abrirNovoProdutoModal() {
+  document.getElementById('novoProdutoNome').value = '';
+  document.getElementById('novoProdutoSenha').value = '';
+  document.getElementById('novoProdutoError').classList.add('hidden');
+  document.getElementById('novoProdutoModal').classList.remove('hidden');
+}
+
+function fecharNovoProdutoModal() {
+  document.getElementById('novoProdutoModal').classList.add('hidden');
+}
+
+function handleBuscarNovoProduto() {
+  const nome = document.getElementById('novoProdutoNome').value.trim();
+  const senha = document.getElementById('novoProdutoSenha').value;
+  const errorEl = document.getElementById('novoProdutoError');
+  errorEl.classList.add('hidden');
+
+  if (!nome) {
+    errorEl.textContent = 'Informe o nome do produto.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+  if (!senha) {
+    errorEl.textContent = 'Informe a senha da Diretoria.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  // Reaproveita o mesmo campo de senha de sessão do resto do Ponto de
+  // Compra (pontoCompraSenha) — assim Trocar/Confirmar item, mais adiante
+  // nesse fluxo, não precisam pedir a senha de novo.
+  document.getElementById('pontoCompraSenha').value = senha;
+
+  fecharNovoProdutoModal();
+  iniciarFluxoNovoProduto(nome);
+}
+
+function iniciarFluxoNovoProduto(nome) {
+  catmatFlowModoNovoProduto = true;
+  catmatFlowItens = [{ estoqueId: null, produto: nome, estoqueAtual: null, pontoPedido: null, un: '' }];
+  catmatFlowMapeamento = [null];
+  catmatFlowResultados = [null];
+  catmatFlowIndex = 0;
+  catmatFlowCategoria = '';
+
+  mostrarPontoCompraScreen('casamento');
+  document.getElementById('pontoCompraCasamentoTitulo').textContent = `Novo Produto — ${nome}`;
+  renderNovoProdutoBuscaInicial();
+  abrirBuscaNovoProduto();
+}
+
+/** Abre o mesmo assistente PDM->Item do "Trocar", em modo local (sem estoque_id, sem gravar no banco) — reaproveitado pra achar a classificação do produto avulso. */
+function abrirBuscaNovoProduto() {
+  const item = catmatFlowItens[0];
+  abrirTrocarCatmatModal(
+    { estoqueId: null, produto: item.produto },
+    {
+      salvarLocal: true,
+      aoConcluir: (escolhido) => {
+        catmatFlowMapeamento[0] = escolhido;
+        renderNovoProdutoBuscaInicial();
+      }
+    }
+  );
+}
+
+/** Tela intermediária do "Novo Produto": mostra o CATMAT já escolhido (ou avisa que ainda não escolheu) e deixa buscar de novo, trocar ou continuar. */
+function renderNovoProdutoBuscaInicial() {
+  const conteudo = document.getElementById('pontoCompraCasamentoConteudo');
+  const mapeamento = catmatFlowMapeamento[0];
+  const temCorrespondencia = mapeamento && mapeamento.codigoItem;
+
+  conteudo.innerHTML = temCorrespondencia
+    ? `<div class="pedido-obtencao-item-meta" style="margin-bottom: 1rem;">CATMAT ${mapeamento.codigoItem} — ${mapeamento.descricaoItem}</div>`
+    : '<p style="color: var(--color-danger); margin-bottom: 1rem;">Nenhuma classificação do CATMAT escolhida ainda — clique em "Buscar no CATMAT".</p>';
+
+  const nav = document.createElement('div');
+  nav.className = 'form-actions';
+
+  const btnCancelar = document.createElement('button');
+  btnCancelar.type = 'button';
+  btnCancelar.className = 'btn btn-secondary';
+  btnCancelar.textContent = 'Cancelar';
+  btnCancelar.addEventListener('click', () => mostrarPontoCompraScreen('filtros'));
+  nav.appendChild(btnCancelar);
+
+  const btnBuscar = document.createElement('button');
+  btnBuscar.type = 'button';
+  btnBuscar.className = 'btn btn-secondary';
+  btnBuscar.textContent = temCorrespondencia ? '✎ Trocar' : 'Buscar no CATMAT';
+  btnBuscar.addEventListener('click', abrirBuscaNovoProduto);
+  nav.appendChild(btnBuscar);
+
+  if (temCorrespondencia) {
+    const btnContinuar = document.createElement('button');
+    btnContinuar.type = 'button';
+    btnContinuar.className = 'btn btn-submit';
+    btnContinuar.textContent = 'Continuar para a pesquisa de preço';
+    btnContinuar.addEventListener('click', () => iniciarEtapaPrecoDoItemAtual());
+    nav.appendChild(btnContinuar);
+  }
+
+  conteudo.appendChild(nav);
+}
+
 async function iniciarFluxoCatmat(items, categoria) {
+  catmatFlowModoNovoProduto = false;
   catmatFlowItens = items.map(item => ({ estoqueId: item.id, produto: item.produto, estoqueAtual: item.total, pontoPedido: item.pontoPedido, un: item.un }));
   catmatFlowSelecionados = catmatFlowItens.map(() => true);
   catmatFlowRevisado = catmatFlowItens.map(() => false);
@@ -4151,6 +4276,13 @@ function handleSeguintePontoCompraSelecionavel() {
     showToast("Selecione pelo menos um item.", "warning");
     return;
   }
+
+  // Senha obrigatória antes de sair da Etapa A — sem ela, nada depois
+  // (Trocar, Confirmar item) consegue gravar nada mesmo, então é melhor
+  // travar aqui do que deixar a pessoa passar pela pesquisa de preço
+  // inteira pra só então descobrir isso.
+  if (!obterSenhaPontoCompraSessao()) return;
+
   catmatFlowItens = indices.map(idx => catmatFlowItens[idx]);
   catmatFlowMapeamento = indices.map(idx => catmatFlowMapeamento[idx]);
   catmatFlowResultados = catmatFlowItens.map(() => null);
@@ -4338,8 +4470,12 @@ function renderCatmatBotoesNavegacao({ permitirCancelar = false, permitirVoltar 
 
 function handleVoltarItemCatmat() {
   if (catmatFlowIndex === 0) {
-    mostrarPontoCompraScreen('selecionavel');
-    renderPontoCompraSelecionavelLista();
+    if (catmatFlowModoNovoProduto) {
+      renderNovoProdutoBuscaInicial();
+    } else {
+      mostrarPontoCompraScreen('selecionavel');
+      renderPontoCompraSelecionavelLista();
+    }
     return;
   }
   catmatFlowIndex--;
@@ -4471,7 +4607,7 @@ function finalizarFluxoCatmat() {
 
   if (itensFinais.length === 0) {
     mostrarPontoCompraScreen('filtros');
-    showToast("Nenhum item foi resolvido — nenhuma Manifestação de Interesse foi gerada.", "warning");
+    showToast("Nenhum item foi resolvido — nenhum documento foi gerado.", "warning");
     return;
   }
 
@@ -4480,8 +4616,22 @@ function finalizarFluxoCatmat() {
   document.getElementById('manifestacaoAno').value = new Date().getFullYear();
   document.getElementById('manifestacaoTitulo').value = '';
   document.getElementById('manifestacaoNup').value = '';
+  document.getElementById('poEditavelNumero').value = '';
   document.getElementById('pontoCompraFinalizarError').classList.add('hidden');
-  renderDocumentosFixosPontoCompra();
+
+  // "Novo Produto": item avulso fora de uma ATA/SRP — só o PO editável faz
+  // sentido aqui, então os campos de IRP/NUP/UASG e os botões de
+  // Manifestação/Apêndice/documentos fixos somem.
+  document.getElementById('pontoCompraFinalizarTitulo').textContent =
+    catmatFlowModoNovoProduto ? 'Baixar PO Editável (.docx)' : 'Gerar documentos de interesse (.docx)';
+  document.getElementById('pontoCompraFinalizarManifestacaoCampos').classList.toggle('hidden', catmatFlowModoNovoProduto);
+  document.getElementById('btnBaixarManifestacaoInteresse').classList.toggle('hidden', catmatFlowModoNovoProduto);
+  document.getElementById('btnBaixarApendiceII').classList.toggle('hidden', catmatFlowModoNovoProduto);
+  if (catmatFlowModoNovoProduto) {
+    document.getElementById('pontoCompraDocumentosFixos').innerHTML = '';
+  } else {
+    renderDocumentosFixosPontoCompra();
+  }
 }
 
 function handleCancelarPontoCompraFinalizar() {
@@ -4760,6 +4910,62 @@ function handleBaixarApendiceIIXlsx() {
     const errorEl = document.getElementById('pontoCompraFinalizarError');
     errorEl.textContent = 'Erro ao gerar a planilha Excel. Tente novamente.';
     errorEl.classList.remove('hidden');
+  }
+}
+
+/**
+ * Adapta catmatFlowItensFinais (produto/descricaoItem/codigoItem/unidade/
+ * qtdMinima/qtdMaxima/qtdTotal/precos) pro formato que
+ * gerarPedidoObtencaoDocx já espera (produto/descricaoCatmat/demanda com
+ * qtdMinima+multiplicador+valorUnitario+unidade) — mesmo gerador usado no
+ * Pedido de Obtenção do ATA=Sim, reaproveitado aqui sem duplicar a lógica
+ * do documento. O valor unitário usado é a média dos até 3 preços
+ * escolhidos na Etapa B (mesmo critério do Apêndice II); a quantidade é a
+ * QTD Total informada (cai pra QTD mín. quando a Total não foi
+ * preenchida).
+ */
+function catmatFlowItensFinaisParaPedidoObtencao() {
+  return catmatFlowItensFinais.map(item => {
+    const precosValidos = (item.precos || []).map(p => Number(p.precoUnitario)).filter(v => !isNaN(v));
+    const precoMedio = precosValidos.length > 0 ? precosValidos.reduce((a, b) => a + b, 0) / precosValidos.length : 0;
+    return {
+      produto: item.produto,
+      descricaoCatmat: item.descricaoItem,
+      demanda: {
+        qtdMinima: item.qtdTotal || item.qtdMinima || 0,
+        multiplicador: 1,
+        valorUnitario: precoMedio,
+        unidade: item.unidade || '',
+        descricaoFornecedor: ''
+      }
+    };
+  });
+}
+
+async function handleBaixarPoEditavelAtaNao() {
+  const errorEl = document.getElementById('pontoCompraFinalizarError');
+  errorEl.classList.add('hidden');
+
+  const numero = document.getElementById('poEditavelNumero').value.trim();
+  if (!numero) {
+    errorEl.textContent = 'Informe o número do Pedido de Obtenção.';
+    errorEl.classList.remove('hidden');
+    return;
+  }
+
+  const btn = document.getElementById('btnBaixarPoEditavelAtaNao');
+  setButtonProcessing(btn, 'Gerando...');
+  try {
+    const itensAdaptados = catmatFlowItensFinaisParaPedidoObtencao();
+    const { blob } = await gerarPedidoObtencaoDocx(itensAdaptados, numero);
+    const numeroSeguro = numero.replace(/[^a-zA-Z0-9]+/g, '_');
+    baixarBlobComoArquivo(blob, `Pedido_de_Obtencao_${numeroSeguro}.docx`);
+  } catch (error) {
+    console.error("Erro ao gerar o PO editável:", error);
+    errorEl.textContent = 'Erro ao gerar o documento Word. Tente novamente.';
+    errorEl.classList.remove('hidden');
+  } finally {
+    clearButtonProcessing(btn);
   }
 }
 
@@ -5853,19 +6059,22 @@ function baixarBlobComoArquivo(blob, nomeArquivo) {
 async function gerarPedidoObtencaoDocx(itensSelecionados, numero) {
   const {
     Document, Paragraph, TextRun, Table, TableRow, TableCell, AlignmentType,
-    WidthType, BorderStyle, VerticalAlign, Footer, Packer, PageBreak, convertMillimetersToTwip
+    WidthType, BorderStyle, VerticalAlign, Footer, Packer, PageNumber, convertMillimetersToTwip
   } = docx;
 
   const anoAtual = new Date().getFullYear();
   const bordaFina = { style: BorderStyle.SINGLE, size: 2, color: '999999' };
   const bordasTabela = { top: bordaFina, bottom: bordaFina, left: bordaFina, right: bordaFina, insideHorizontal: bordaFina, insideVertical: bordaFina };
 
+  // Espaçamento enxuto (em vigésimos de ponto) — texto de formulário, não
+  // de leitura corrida, então as linhas podem ficar mais próximas umas das
+  // outras sem perder legibilidade.
   function textoCentrado(texto, { bold = false, size = 19 } = {}) {
-    return new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 80 }, children: [new TextRun({ text: texto, bold, size })] });
+    return new Paragraph({ alignment: AlignmentType.CENTER, spacing: { after: 40 }, children: [new TextRun({ text: texto, bold, size })] });
   }
 
   function textoNormal(texto, { bold = false, size = 19, alignment = AlignmentType.LEFT } = {}) {
-    return new Paragraph({ alignment, spacing: { after: 100 }, children: [new TextRun({ text: texto, bold, size })] });
+    return new Paragraph({ alignment, spacing: { after: 60 }, children: [new TextRun({ text: texto, bold, size })] });
   }
 
   function linhaCheckbox(texto) {
@@ -5953,21 +6162,34 @@ async function gerarPedidoObtencaoDocx(itensSelecionados, numero) {
     ]
   });
 
-  const rodape = (texto) => new Footer({
-    children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: texto, size: 15, color: '666666' })] })]
+  // Rodapé único, com campo dinâmico "Página X de Y" do próprio Word — se
+  // ajusta sozinho a quantas páginas o conteúdo realmente ocupar, em vez de
+  // "1 - 3"/"2 - 3" fixos que ficavam errados sempre que o texto encolhia
+  // ou crescia.
+  const rodape = new Footer({
+    children: [new Paragraph({
+      alignment: AlignmentType.CENTER,
+      children: [new TextRun({ children: ['Página ', PageNumber.CURRENT, ' de ', PageNumber.TOTAL_PAGES], size: 15, color: '666666' })]
+    })]
   });
 
   const margemPagina = {
-    top: convertMillimetersToTwip(15), bottom: convertMillimetersToTwip(15),
+    top: convertMillimetersToTwip(12), bottom: convertMillimetersToTwip(12),
     left: convertMillimetersToTwip(14), right: convertMillimetersToTwip(14)
   };
 
+  // Uma seção só, com TODO o conteúdo em sequência — antes eram 3 seções
+  // (uma por "página"), e cada seção força uma quebra de página no
+  // Word/docx mesmo que o conteúdo da anterior termine bem antes do fim da
+  // folha. Isso deixava espaço em branco sobrando e, quando o conteúdo de
+  // uma "página" estourava pro meio da próxima, surgia uma página extra
+  // quase vazia entre elas. Numa seção só, o texto flui naturalmente e o
+  // Word decide sozinho onde quebrar — sem gaps.
   const doc = new Document({
     sections: [
-      // ===== PÁGINA 1 =====
       {
         properties: { page: { margin: margemPagina } },
-        footers: { default: rodape('1 - 3') },
+        footers: { default: rodape },
         children: [
           textoCentrado('MARINHA DO BRASIL', { bold: true, size: 24 }),
           textoCentrado('BASE FLUVIAL DE LADÁRIO', { bold: true, size: 20 }),
@@ -5982,14 +6204,7 @@ async function gerarPedidoObtencaoDocx(itensSelecionados, numero) {
           linhaData(),
           ...blocoAssinatura([{ texto: 'ASSINATURA E CARIMBO DO RESPONSÁVEL' }, { texto: 'SETOR REQUISITANTE' }]),
           ...blocoAssinatura([{ texto: 'ASSINATURA E CARIMBO DO RESPONSÁVEL' }, { texto: 'DIVISÃO DE OBTENÇÃO' }]),
-          textoNormal('Enquadramento: (Somente nas hipóteses de dispensa/inexigibilidade)')
-        ]
-      },
-      // ===== PÁGINA 2 =====
-      {
-        properties: { page: { margin: margemPagina } },
-        footers: { default: rodape('2 - 3') },
-        children: [
+          textoNormal('Enquadramento: (Somente nas hipóteses de dispensa/inexigibilidade)'),
           textoNormal('4. ESTOQUE (SOMENTE EM CASO DE MATERIAIS)', { bold: true }),
           linhaCheckbox('SIM – Justificativa: ________________________________________________'),
           linhaCheckbox('NÃO'),
@@ -6012,14 +6227,7 @@ async function gerarPedidoObtencaoDocx(itensSelecionados, numero) {
           textoNormal('Despacho:', { bold: true }),
           linhaCheckbox('Determino a Seção de Finanças reservar o recurso (item 5) para custear a demanda apresentada.'),
           linhaData(),
-          textoCentrado('________________________________')
-        ]
-      },
-      // ===== PÁGINA 3 =====
-      {
-        properties: { page: { margin: margemPagina } },
-        footers: { default: rodape('3 - 3') },
-        children: [
+          textoCentrado('________________________________'),
           textoCentrado('LEONARDO ASSÁ GALLEGO SOARES', { bold: true, size: 20 }),
           textoCentrado('Capitão de Mar e Guerra (EN)'),
           textoCentrado('Comandante'),

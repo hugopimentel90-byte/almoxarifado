@@ -1250,6 +1250,12 @@
             </svg>
             Gerar lista própria para ATA
           </button>
+          <button id="btnAbrirNovoProduto" class="btn-refresh">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+            </svg>
+            Novo Produto
+          </button>
         </header>
 
         <section class="table-card" id="pontoCompraFiltrosSection">
@@ -1334,12 +1340,16 @@
           <div id="pontoCompraCasamentoConteudo" style="padding: 1.5rem;"></div>
         </section>
 
-        <!-- Etapa C: cabeçalho da Manifestação de Interesse + download do .docx. -->
+        <!-- Etapa C: cabeçalho da Manifestação de Interesse + download do .docx.
+             No modo "Novo Produto" (item avulso, fora de uma ATA/SRP), só o
+             bloco do PO editável fica visível — os campos de IRP/NUP/UASG e os
+             botões de Manifestação/Apêndice/documentos fixos somem (ver
+             finalizarFluxoCatmat em app.js). -->
         <section class="table-card hidden" id="pontoCompraFinalizarSection">
           <div class="table-header">
-            <div class="table-title">Gerar documentos de interesse (.docx)</div>
+            <div class="table-title" id="pontoCompraFinalizarTitulo">Gerar documentos de interesse (.docx)</div>
           </div>
-          <div style="padding: 0 1.5rem;">
+          <div id="pontoCompraFinalizarManifestacaoCampos" style="padding: 0 1.5rem;">
             <div class="form-footer-inputs">
               <div class="filter-group">
                 <label for="manifestacaoAno">Ano do IRP</label>
@@ -1365,11 +1375,20 @@
               </div>
             </div>
           </div>
+          <div style="padding: 0 1.5rem;">
+            <div class="form-footer-inputs" style="margin-top: 1rem;">
+              <div class="filter-group filter-group--wide">
+                <label for="poEditavelNumero">Número do Pedido de Obtenção (PO editável)</label>
+                <input type="text" id="poEditavelNumero" placeholder="Ex: BFLa-16-30/2026">
+              </div>
+            </div>
+          </div>
           <p id="pontoCompraFinalizarError" class="modal-error-text hidden" style="padding: 0 1.5rem;"></p>
           <div class="form-actions" style="padding: 1.5rem;">
             <button id="btnCancelarPontoCompraFinalizar" class="btn btn-secondary">Cancelar</button>
             <button id="btnBaixarManifestacaoInteresse" class="btn btn-submit">Baixar Manifestação de Interesse (.docx)</button>
             <button id="btnBaixarApendiceII" class="btn btn-secondary">Baixar Apêndice II - Relação de Itens (.xlsx)</button>
+            <button id="btnBaixarPoEditavelAtaNao" class="btn btn-secondary">Baixar PO Editável (.docx)</button>
           </div>
           <!-- Documentos fixos (ETP/TR/Declaração/DFD) — só aparecem quando a
                categoria é Produto de limpeza, preenchido por app.js (ver
@@ -1411,6 +1430,37 @@
           <div class="form-actions" style="margin-top: 1.5rem;">
             <button id="btnCancelarListaPropriaAta" class="btn btn-secondary">Cancelar</button>
             <button id="btnExtrairListaPropriaAta" class="btn btn-submit">Extrair itens</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Modal "Novo Produto" — um único item avulso, fora do Estoque: digita
+           o nome, busca a classificação no CATMAT (mesmo assistente PDM->Item
+           do Trocar, em modo local) e segue pra pesquisa de preço + só o PO
+           editável no final (ver iniciarFluxoNovoProduto em app.js). -->
+      <div id="novoProdutoModal" class="modal-overlay hidden">
+        <div class="modal-card">
+          <h2 class="modal-title">Novo Produto</h2>
+          <p class="modal-subtitle">
+            Descreva um produto novo (ainda fora do Estoque) pra buscar a classificação mais parecida
+            no catálogo do CATMAT, pesquisar preço e gerar só o Pedido de Obtenção (PO) editável.
+          </p>
+
+          <div class="filter-group" style="margin-top: 1rem;">
+            <label for="novoProdutoNome">Nome do Produto</label>
+            <input type="text" id="novoProdutoNome" placeholder="Ex: Cadeira giratória estofada">
+          </div>
+
+          <div class="filter-group" style="margin-top: 1rem;">
+            <label for="novoProdutoSenha">Senha da Diretoria</label>
+            <input type="password" id="novoProdutoSenha" placeholder="Digite a senha... (usada em Trocar e ao salvar os preços)">
+          </div>
+
+          <p id="novoProdutoError" class="modal-error-text hidden"></p>
+
+          <div class="form-actions" style="margin-top: 1.5rem;">
+            <button id="btnCancelarNovoProduto" class="btn btn-secondary">Cancelar</button>
+            <button id="btnBuscarNovoProduto" class="btn btn-submit">Buscar</button>
           </div>
         </div>
       </div>
