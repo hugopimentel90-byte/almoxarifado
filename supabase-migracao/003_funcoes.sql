@@ -10,7 +10,8 @@
 -- qualquer coisa; se faltar saldo pra algum, nada é gravado.
 --
 -- items: array de objetos {produto, qtd, un, data (YYYY-MM-DD), setor,
---   pedido, pagoEm (YYYY-MM-DD), mes, categoria, tempoRetiradaMinutos}.
+--   pedido, observacao, pagoEm (YYYY-MM-DD), mes, categoria,
+--   tempoRetiradaMinutos}.
 -- =====================================================================
 create or replace function retirar_material(items jsonb)
 returns jsonb
@@ -40,6 +41,7 @@ begin
     nullif(elem->>'data', '')::date as data,
     elem->>'setor' as setor,
     elem->>'pedido' as pedido,
+    nullif(elem->>'observacao', '') as observacao,
     nullif(elem->>'pagoEm', '')::date as pago_em,
     nullif(elem->>'mes', '')::smallint as mes,
     elem->>'categoria' as categoria,
@@ -77,8 +79,8 @@ begin
   end if;
 
   -- Grava no Registro, uma linha por item, na ordem original do lote.
-  insert into registro (produto, qtd, un, data, setor, pedido, pago_em, mes, categoria, tempo_retirada_min)
-  select produto, qtd, un, data, setor, pedido, pago_em, mes, categoria, tempo_retirada_min
+  insert into registro (produto, qtd, un, data, setor, pedido, observacao, pago_em, mes, categoria, tempo_retirada_min)
+  select produto, qtd, un, data, setor, pedido, observacao, pago_em, mes, categoria, tempo_retirada_min
   from tmp_itens
   order by ord;
   get diagnostics v_count = row_count;

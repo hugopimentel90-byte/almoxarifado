@@ -222,6 +222,7 @@ function mapItemParaRpc(item) {
     data: item.data instanceof Date ? dateToISODateStr(item.data) : brDateStrToISODateStr(item.dataStr || item.data),
     setor: item.setor || '',
     pedido: item.pedido || '',
+    observacao: item.observacao || '',
     pagoEm: brDateStrToISODateStr(item.pagoEm),
     mes: item.mes || '',
     categoria: item.categoria || '',
@@ -773,6 +774,7 @@ async function fetchDashboardData() {
     populateFormSectors();
     populateConsumoLimiteSetorFilter();
     renderConsumoLimiteSetor();
+    refreshPimsKpis();
 
   } catch (error) {
     console.error("Erro no processamento dos dados do Dashboard:", error);
@@ -788,7 +790,7 @@ function switchTab(tabName) {
   // Reforço de segurança: visitante não tem acesso às abas de Retirada e Entrada,
   // nem à de Ponto de Pedido/Mapeamento CATMAT (só o perfil administrador), mesmo
   // que algo tente disparar switchTab diretamente para elas.
-  if (currentUserRole === 'visitante' && (tabName === 'retirada' || tabName === 'entrada' || tabName === 'pontopedido' || tabName === 'catmatmapeamento')) {
+  if (currentUserRole === 'visitante' && (tabName === 'retirada' || tabName === 'entrada' || tabName === 'pontopedido' || tabName === 'catmatmapeamento' || tabName === 'relatorios')) {
     tabName = 'dashboard';
   }
 
@@ -799,6 +801,7 @@ function switchTab(tabName) {
   const menuLiberacao = document.getElementById('menuLiberacao');
   const menuPontoPedido = document.getElementById('menuPontoPedido');
   const menuCatmatMapeamento = document.getElementById('menuCatmatMapeamento');
+  const menuRelatorios = document.getElementById('menuRelatorios');
   const viewDashboard = document.getElementById('viewDashboard');
   const viewRetirada = document.getElementById('viewRetirada');
   const viewEntrada = document.getElementById('viewEntrada');
@@ -806,6 +809,7 @@ function switchTab(tabName) {
   const viewLiberacao = document.getElementById('viewLiberacao');
   const viewPontoPedido = document.getElementById('viewPontoPedido');
   const viewCatmatMapeamento = document.getElementById('viewCatmatMapeamento');
+  const viewRelatorios = document.getElementById('viewRelatorios');
 
   menuDashboard.classList.remove('active');
   menuRetirada.classList.remove('active');
@@ -814,6 +818,7 @@ function switchTab(tabName) {
   menuLiberacao.classList.remove('active');
   menuPontoPedido.classList.remove('active');
   menuCatmatMapeamento.classList.remove('active');
+  menuRelatorios.classList.remove('active');
   viewDashboard.classList.add('hidden');
   viewRetirada.classList.add('hidden');
   viewEntrada.classList.add('hidden');
@@ -821,6 +826,7 @@ function switchTab(tabName) {
   viewLiberacao.classList.add('hidden');
   viewPontoPedido.classList.add('hidden');
   viewCatmatMapeamento.classList.add('hidden');
+  viewRelatorios.classList.add('hidden');
 
   if (tabName === 'dashboard') {
     menuDashboard.classList.add('active');
@@ -856,6 +862,11 @@ function switchTab(tabName) {
     viewCatmatMapeamento.classList.remove('hidden');
     stockLevelsFetchPromise = fetchStockLevels();
     carregarFilaRevisaoCatmat();
+  } else if (tabName === 'relatorios') {
+    menuRelatorios.classList.add('active');
+    viewRelatorios.classList.remove('hidden');
+    populateRelatorioFilters();
+    applyRelatorioFilters();
   }
 }
 
@@ -970,6 +981,172 @@ function applyFilters() {
   updateCharts();
 }
 
+// --- ABA RELATÓRIOS: mesmos filtros do Dashboard, numa lista exportável em PDF ---
+
+let currentRelatorioFilteredData = [];
+
+/** Igual a populateFilters, mas pros campos próprios da aba Relatórios — preserva a seleção ao reabrir a aba (não reseta pra "Todos" toda vez). */
+function populateRelatorioFilters() {
+  const monthSelect = document.getElementById('relatorioFilterMonth');
+  const sectorSelect = document.getElementById('relatorioFilterSector');
+  const categorySelect = document.getElementById('relatorioFilterCategory');
+
+  const prevMonth = monthSelect.value;
+  const prevSector = sectorSelect.value;
+  const prevCategory = categorySelect.value;
+
+  monthSelect.innerHTML = '<option value="all">Todos os Meses</option>';
+  sectorSelect.innerHTML = '<option value="all">Todos os Setores</option>';
+  categorySelect.innerHTML = '<option value="all">Todas as Categorias</option>';
+
+  const uniqueMonths = [...new Set(rawData.map(item => item.mes))].sort((a, b) => a - b);
+  uniqueMonths.forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = m;
+    opt.textContent = MONTH_NAMES[m] || `Mês ${m}`;
+    monthSelect.appendChild(opt);
+  });
+
+  const uniqueSectors = [...new Set(rawData.map(item => item.setor))].sort();
+  uniqueSectors.forEach(s => {
+    const opt = document.createElement('option');
+    opt.value = s;
+    opt.textContent = s;
+    sectorSelect.appendChild(opt);
+  });
+
+  const uniqueCategories = [...new Set(rawData.map(item => item.categoria))].sort();
+  uniqueCategories.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c;
+    opt.textContent = c;
+    categorySelect.appendChild(opt);
+  });
+
+  monthSelect.value = [...monthSelect.options].some(o => o.value === prevMonth) ? prevMonth : 'all';
+  sectorSelect.value = [...sectorSelect.options].some(o => o.value === prevSector) ? prevSector : 'all';
+  categorySelect.value = [...categorySelect.options].some(o => o.value === prevCategory) ? prevCategory : 'all';
+
+  // Data inicial/final só é preenchida na primeira vez que a aba abre nesta sessão.
+  if (!document.getElementById('relatorioFilterDateStart').value) {
+    const dates = rawData.map(item => item.filterDate);
+    if (dates.length > 0) {
+      const minDate = new Date(Math.min(...dates));
+      const maxDate = new Date(Math.max(...dates));
+      const toISODate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      document.getElementById('relatorioFilterDateStart').value = toISODate(minDate);
+      document.getElementById('relatorioFilterDateEnd').value = toISODate(maxDate);
+    }
+  }
+}
+
+/** Igual a applyFilters, só que lê os campos da aba Relatórios e alimenta a lista/PDF em vez dos KPIs/gráficos do Dashboard. */
+function applyRelatorioFilters() {
+  const dateStartVal = document.getElementById('relatorioFilterDateStart').value;
+  const dateEndVal = document.getElementById('relatorioFilterDateEnd').value;
+  const monthVal = document.getElementById('relatorioFilterMonth').value;
+  const sectorVal = document.getElementById('relatorioFilterSector').value;
+  const categoryVal = document.getElementById('relatorioFilterCategory').value;
+
+  const start = dateStartVal ? new Date(dateStartVal + 'T00:00:00') : null;
+  const end = dateEndVal ? new Date(dateEndVal + 'T23:59:59') : null;
+
+  currentRelatorioFilteredData = rawData.filter(item => {
+    if (start && item.filterDate < start) return false;
+    if (end && item.filterDate > end) return false;
+    if (monthVal !== 'all' && item.mes.toString() !== monthVal) return false;
+    if (sectorVal !== 'all' && item.setor !== sectorVal) return false;
+    if (categoryVal !== 'all' && item.categoria !== categoryVal) return false;
+    return true;
+  });
+
+  renderRelatorioTable();
+}
+
+function renderRelatorioTable() {
+  const tbody = document.getElementById('relatorioTableBody');
+  const contador = document.getElementById('relatorioContador');
+
+  const rows = currentRelatorioFilteredData.slice()
+    .sort((a, b) => b.filterDate - a.filterDate || a.produto.localeCompare(b.produto));
+
+  contador.textContent = `${rows.length.toLocaleString('pt-BR')} ${rows.length === 1 ? 'item' : 'itens'}`;
+
+  if (rows.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Nenhum item encontrado para esses filtros</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = rows.map(item => `
+    <tr>
+      <td>${item.dataStr || '—'}</td>
+      <td style="font-weight: 600; color: var(--text-primary);">${item.produto}</td>
+      <td style="text-align: center;">${formatDataLabelValue(item.qtd)}</td>
+      <td>${item.un || '—'}</td>
+      <td>${item.setor || '—'}</td>
+      <td>${item.categoria || '—'}</td>
+      <td>${item.pedido || '—'}</td>
+    </tr>
+  `).join('');
+}
+
+function exportRelatorioPDF() {
+  if (currentRelatorioFilteredData.length === 0) {
+    showToast("Nenhum item para exportar com esses filtros.", "warning");
+    return;
+  }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+
+  const now = new Date();
+  const generatedAt = `${now.toLocaleDateString('pt-BR')} ${now.toLocaleTimeString('pt-BR')}`;
+
+  const monthVal = document.getElementById('relatorioFilterMonth').value;
+  const sectorVal = document.getElementById('relatorioFilterSector').value;
+  const categoryVal = document.getElementById('relatorioFilterCategory').value;
+  const dateStartVal = document.getElementById('relatorioFilterDateStart').value;
+  const dateEndVal = document.getElementById('relatorioFilterDateEnd').value;
+
+  doc.setFontSize(16);
+  doc.setTextColor(15, 23, 42);
+  doc.text('Relatório de Itens Retirados do Estoque', 14, 18);
+
+  doc.setFontSize(9.5);
+  doc.setTextColor(71, 85, 105);
+  const periodo = `Período: ${dateStartVal ? formatSupabaseDateBR(dateStartVal) : '—'} a ${dateEndVal ? formatSupabaseDateBR(dateEndVal) : '—'}`;
+  const filtros = `Mês: ${monthVal === 'all' ? 'Todos' : (MONTH_NAMES[monthVal] || monthVal)}  •  Setor: ${sectorVal === 'all' ? 'Todos' : sectorVal}  •  Categoria: ${categoryVal === 'all' ? 'Todas' : categoryVal}`;
+  doc.text(periodo, 14, 25);
+  doc.text(filtros, 14, 30.5);
+  doc.text(`Gerado em: ${generatedAt}`, 14, 36);
+
+  const rows = currentRelatorioFilteredData.slice()
+    .sort((a, b) => b.filterDate - a.filterDate || a.produto.localeCompare(b.produto));
+
+  const tableBody = rows.map(item => [
+    item.dataStr || '—',
+    item.produto,
+    formatDataLabelValue(item.qtd),
+    item.un || '—',
+    item.setor || '—',
+    item.categoria || '—',
+    item.pedido || '—'
+  ]);
+
+  doc.autoTable({
+    startY: 41,
+    head: [['Data', 'Produto', 'Qtd', 'Unidade', 'Setor', 'Categoria', 'Pedido']],
+    body: tableBody,
+    styles: { font: 'helvetica', fontSize: 8, cellPadding: 2.5 },
+    headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    columnStyles: { 2: { halign: 'center' } }
+  });
+
+  const fileDate = now.toISOString().split('T')[0];
+  doc.save(`Relatorio_Retiradas_${fileDate}.pdf`);
+}
+
 function populateFormSectors() {
   const formSector = document.getElementById('formSector');
   formSector.innerHTML = '<option value="">Selecione o setor...</option>';
@@ -1002,6 +1179,60 @@ function updateKPIs() {
   const totalHoras = totalMinutos / 60;
   document.getElementById('kpiTempoAlocado').textContent =
     totalHoras.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' h';
+
+  // Retiradas lançadas manualmente na aba Retirada (observacao = "Retirada
+  // manual", gravada por submitWithdrawalForm) em vez de aprovadas via
+  // Liberação — mesmo critério de "pedido distinto" de Total de Pedidos,
+  // acima, só que restrito a essas. Pedido é campo obrigatório no
+  // formulário de Retirada, então serve como identificador de "uma
+  // operação de retirada" sem precisar de outra coluna.
+  const retrabalhoPedidos = new Set(
+    currentFilteredData
+      .filter(item => item.observacao === 'Retirada manual')
+      .map(item => item.pedido)
+      .filter(p => p && p !== 'Sem Pedido')
+  );
+  document.getElementById('kpiRetrabalho').textContent = retrabalhoPedidos.size.toLocaleString('pt-BR');
+}
+
+/**
+ * KPIs dos PIMs (card "PIMs Pendentes de Registro"/"...de Aprovação") —
+ * lêem liberacaoCards, mesmo array usado pelo Kanban de Liberação
+ * (fetchLiberacaoCards). "Pendente de registro" = já Liberados mas a
+ * retirada ainda não foi registrada no Estoque (registradoNoEstoqueEm
+ * vazio); "pendente de aprovação" = qualquer etapa antes de Liberados
+ * (Setor/Encarregado/Imediato). Função pura, só lê o array — quem muda
+ * liberacaoCards (fetchLiberacaoCards) chama isso de novo pra atualizar
+ * os cards.
+ */
+function renderPimsKpis() {
+  const elRegistro = document.getElementById('kpiPimsPendentesRegistro');
+  const elAprovacao = document.getElementById('kpiPimsPendentesAprovacao');
+  if (!elRegistro || !elAprovacao) return;
+
+  const pendentesRegistro = liberacaoCards.filter(c => c.status === 'Liberados' && !c.registradoNoEstoqueEm).length;
+  const pendentesAprovacao = liberacaoCards.filter(c => c.status !== 'Liberados').length;
+
+  elRegistro.textContent = pendentesRegistro.toLocaleString('pt-BR');
+  elAprovacao.textContent = pendentesAprovacao.toLocaleString('pt-BR');
+}
+
+/**
+ * Busca liberacaoCards especificamente pro Dashboard — ao contrário de
+ * fetchLiberacaoCards (que só roda quando a aba Liberação é aberta), os
+ * cards de PIM do Dashboard precisam de dado mesmo que o usuário nunca
+ * tenha visitado aquela aba na sessão. Silenciosa (sem showLoading nem
+ * toast de erro) pra não competir com o carregamento principal do
+ * Dashboard — é um indicador a mais, não o dado principal da tela.
+ */
+async function refreshPimsKpis() {
+  try {
+    const data = await supabaseSelectAll('liberacao');
+    liberacaoCards = (data || []).map(mapLiberacaoRowToCard);
+  } catch (error) {
+    console.error("Erro ao buscar PIMs para os indicadores do Dashboard:", error);
+  }
+  renderPimsKpis();
 }
 
 // --- INTEGRAÇÃO COM CHART.JS ---
@@ -6017,6 +6248,7 @@ async function fetchLiberacaoCards() {
   }
 
   renderLiberacaoBoard();
+  renderPimsKpis();
 }
 
 /**
@@ -7145,6 +7377,13 @@ function initEventListeners() {
   document.getElementById('menuLiberacao').addEventListener('click', () => switchTab('liberacao'));
   document.getElementById('menuPontoPedido').addEventListener('click', () => switchTab('pontopedido'));
   document.getElementById('menuCatmatMapeamento').addEventListener('click', () => switchTab('catmatmapeamento'));
+  document.getElementById('menuRelatorios').addEventListener('click', () => switchTab('relatorios'));
+  document.getElementById('relatorioFilterDateStart').addEventListener('change', applyRelatorioFilters);
+  document.getElementById('relatorioFilterDateEnd').addEventListener('change', applyRelatorioFilters);
+  document.getElementById('relatorioFilterMonth').addEventListener('change', applyRelatorioFilters);
+  document.getElementById('relatorioFilterSector').addEventListener('change', applyRelatorioFilters);
+  document.getElementById('relatorioFilterCategory').addEventListener('change', applyRelatorioFilters);
+  document.getElementById('btnExportRelatorioPDF').addEventListener('click', exportRelatorioPDF);
 
   // Botão de Sair: revoga o acesso liberado neste navegador e volta para a tela de senha
   document.getElementById('btnLogout').addEventListener('click', handleLogout);
@@ -7259,6 +7498,7 @@ function applyRoleRestrictions() {
   document.getElementById('menuEntrada').closest('li').classList.toggle('hidden', isVisitor);
   document.getElementById('menuPontoPedido').closest('li').classList.toggle('hidden', isVisitor);
   document.getElementById('menuCatmatMapeamento').closest('li').classList.toggle('hidden', isVisitor);
+  document.getElementById('menuRelatorios').closest('li').classList.toggle('hidden', isVisitor);
 
   const consumoSection = document.getElementById('consumoLimiteSetorSection');
   if (consumoSection) {

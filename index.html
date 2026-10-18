@@ -547,6 +547,14 @@
             <span class="menu-link-text">Mapeamento CATMAT</span>
           </a>
         </li>
+        <li class="menu-item">
+          <a id="menuRelatorios" class="menu-link" title="Relatórios">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17h6m-6-4h6m-6-4h6M5 21h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2z"></path>
+            </svg>
+            <span class="menu-link-text">Relatórios</span>
+          </a>
+        </li>
       </nav>
 
       <div class="sidebar-footer">
@@ -712,6 +720,50 @@
             </div>
             <div class="kpi-value" id="kpiTempoAlocado">0,0 h</div>
             <div class="kpi-footer">Tempo total dedicado às retiradas</div>
+          </div>
+
+          <!-- Retiradas lançadas manualmente pela aba Retirada (em vez de só
+               liberar o PIM na Liberação) — conta pedidos distintos com
+               observacao = "Retirada manual", dentro do período filtrado. -->
+          <div class="kpi-card kpi-retrabalho">
+            <div class="kpi-header">
+              <span class="kpi-title">Retrabalho</span>
+              <div class="kpi-icon">
+                <svg style="width:20px;height:20px" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                </svg>
+              </div>
+            </div>
+            <div class="kpi-value" id="kpiRetrabalho">0</div>
+            <div class="kpi-footer">Retiradas lançadas manualmente (fora da Liberação)</div>
+          </div>
+
+          <!-- PIMs liberados, aguardando a retirada ser registrada no Estoque -->
+          <div class="kpi-card kpi-pendente-registro">
+            <div class="kpi-header">
+              <span class="kpi-title">PIMs Pendentes de Registro</span>
+              <div class="kpi-icon">
+                <svg style="width:20px;height:20px" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 01-2-2V4a2 2 0 012-2h14a2 2 0 012 2v2a2 2 0 01-2 2M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"></path>
+                </svg>
+              </div>
+            </div>
+            <div class="kpi-value" id="kpiPimsPendentesRegistro">0</div>
+            <div class="kpi-footer">Liberados, aguardando retirada no Estoque</div>
+          </div>
+
+          <!-- PIMs ainda não liberados (em qualquer etapa do fluxo de aprovação) -->
+          <div class="kpi-card kpi-pendente-aprovacao">
+            <div class="kpi-header">
+              <span class="kpi-title">PIMs Pendentes de Aprovação</span>
+              <div class="kpi-icon">
+                <svg style="width:20px;height:20px" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                </svg>
+              </div>
+            </div>
+            <div class="kpi-value" id="kpiPimsPendentesAprovacao">0</div>
+            <div class="kpi-footer">Ainda não liberados (Setor/Encarregado/Imediato)</div>
           </div>
         </section>
 
@@ -1436,6 +1488,86 @@
               </thead>
               <tbody id="catmatRevisaoTableBody">
                 <tr><td colspan="7" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Nenhum item pendente de revisão no momento</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+
+      <!-- ABA: RELATÓRIOS -->
+      <main id="viewRelatorios" class="view-content container hidden">
+        <header style="margin-bottom: 1.5rem;">
+          <div class="header-title-container">
+            <h1>Relatórios</h1>
+            <p>Lista dos itens retirados do Estoque, com os mesmos filtros do Dashboard</p>
+          </div>
+        </header>
+
+        <section class="filters-panel">
+          <div class="filters-title">
+            <svg style="width:16px;height:16px" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path>
+            </svg>
+            Filtros de Análise
+          </div>
+          <div class="filters-grid">
+            <div class="filter-group">
+              <label for="relatorioFilterDateStart">Data Inicial</label>
+              <input type="date" id="relatorioFilterDateStart">
+            </div>
+            <div class="filter-group">
+              <label for="relatorioFilterDateEnd">Data Final</label>
+              <input type="date" id="relatorioFilterDateEnd">
+            </div>
+            <div class="filter-group">
+              <label for="relatorioFilterMonth">Mês</label>
+              <select id="relatorioFilterMonth">
+                <option value="all">Todos os Meses</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <label for="relatorioFilterSector">Setor</label>
+              <select id="relatorioFilterSector">
+                <option value="all">Todos os Setores</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <label for="relatorioFilterCategory">Categoria</label>
+              <select id="relatorioFilterCategory">
+                <option value="all">Todas as Categorias</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <section class="table-card">
+          <div class="table-header">
+            <div class="table-title">Itens Retirados do Estoque</div>
+            <div class="table-header-actions">
+              <span id="relatorioContador" style="font-size: 0.8125rem; color: var(--text-secondary); margin-right: 0.5rem;"></span>
+              <button id="btnExportRelatorioPDF" class="btn btn-secondary btn-export-pdf">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15V3m0 12l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"></path>
+                </svg>
+                Extrair PDF
+              </button>
+            </div>
+          </div>
+          <div class="table-container">
+            <table>
+              <thead>
+                <tr>
+                  <th>Data</th>
+                  <th>Produto</th>
+                  <th style="text-align: center;">Quantidade</th>
+                  <th>Unidade</th>
+                  <th>Setor</th>
+                  <th>Categoria</th>
+                  <th>Pedido</th>
+                </tr>
+              </thead>
+              <tbody id="relatorioTableBody">
+                <tr><td colspan="7" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Nenhum item encontrado para esses filtros</td></tr>
               </tbody>
             </table>
           </div>
