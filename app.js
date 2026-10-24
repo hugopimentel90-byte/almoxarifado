@@ -1147,6 +1147,56 @@ function exportRelatorioPDF() {
   doc.save(`Relatorio_Retiradas_${fileDate}.pdf`);
 }
 
+/** Mesma lista/filtros do exportRelatorioPDF, só que em .xlsx (SheetJS, window.XLSX) em vez de PDF — mesmo padrão já usado no Apêndice II do Ponto de Compra. */
+function exportRelatorioXlsx() {
+  if (currentRelatorioFilteredData.length === 0) {
+    showToast("Nenhum item para exportar com esses filtros.", "warning");
+    return;
+  }
+
+  const now = new Date();
+  const generatedAt = `${now.toLocaleDateString('pt-BR')} ${now.toLocaleTimeString('pt-BR')}`;
+
+  const monthVal = document.getElementById('relatorioFilterMonth').value;
+  const sectorVal = document.getElementById('relatorioFilterSector').value;
+  const categoryVal = document.getElementById('relatorioFilterCategory').value;
+  const dateStartVal = document.getElementById('relatorioFilterDateStart').value;
+  const dateEndVal = document.getElementById('relatorioFilterDateEnd').value;
+
+  const rows = currentRelatorioFilteredData.slice()
+    .sort((a, b) => b.filterDate - a.filterDate || a.produto.localeCompare(b.produto));
+
+  const linhas = [];
+  linhas.push(['Relatório de Itens Retirados do Estoque']);
+  linhas.push([`Período: ${dateStartVal ? formatSupabaseDateBR(dateStartVal) : '—'} a ${dateEndVal ? formatSupabaseDateBR(dateEndVal) : '—'}`]);
+  linhas.push([`Mês: ${monthVal === 'all' ? 'Todos' : (MONTH_NAMES[monthVal] || monthVal)}  •  Setor: ${sectorVal === 'all' ? 'Todos' : sectorVal}  •  Categoria: ${categoryVal === 'all' ? 'Todas' : categoryVal}`]);
+  linhas.push([`Gerado em: ${generatedAt}`]);
+  linhas.push([]);
+  linhas.push(['Data', 'Produto', 'Qtd', 'Unidade', 'Setor', 'Categoria', 'Pedido']);
+  rows.forEach(item => {
+    linhas.push([
+      item.dataStr || '—',
+      item.produto,
+      Number(item.qtd) || 0,
+      item.un || '—',
+      item.setor || '—',
+      item.categoria || '—',
+      item.pedido || '—'
+    ]);
+  });
+
+  const ws = XLSX.utils.aoa_to_sheet(linhas);
+  ws['!cols'] = [{ wch: 10 }, { wch: 45 }, { wch: 10 }, { wch: 10 }, { wch: 22 }, { wch: 18 }, { wch: 16 }];
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Relatório');
+  const arrayBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  const blob = new Blob([arrayBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+
+  const fileDate = now.toISOString().split('T')[0];
+  baixarBlobComoArquivo(blob, `Relatorio_Retiradas_${fileDate}.xlsx`);
+}
+
 function populateFormSectors() {
   const formSector = document.getElementById('formSector');
   formSector.innerHTML = '<option value="">Selecione o setor...</option>';
@@ -7592,6 +7642,7 @@ function initEventListeners() {
   document.getElementById('relatorioFilterSector').addEventListener('change', applyRelatorioFilters);
   document.getElementById('relatorioFilterCategory').addEventListener('change', applyRelatorioFilters);
   document.getElementById('btnExportRelatorioPDF').addEventListener('click', exportRelatorioPDF);
+  document.getElementById('btnExportRelatorioXlsx').addEventListener('click', exportRelatorioXlsx);
 
   // Botão de Sair: revoga o acesso liberado neste navegador e volta para a tela de senha
   document.getElementById('btnLogout').addEventListener('click', handleLogout);
