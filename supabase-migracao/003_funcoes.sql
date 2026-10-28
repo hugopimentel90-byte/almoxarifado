@@ -457,7 +457,9 @@ as $$
 declare
   v_diretoria_senha constant text := 'diretoria321';
   v_produto text := trim(coalesce(p_produto, ''));
+  v_antes estoque;
   v_row estoque;
+  v_diff jsonb;
 begin
   if p_senha is distinct from v_diretoria_senha then
     raise exception 'Senha da Diretoria incorreta.';
@@ -472,7 +474,7 @@ begin
     raise exception 'O preço de ATA não pode ser negativo.';
   end if;
 
-  select * into v_row from estoque where id = p_id for update;
+  select * into v_antes from estoque where id = p_id for update;
   if not found then
     raise exception 'Produto não encontrado.';
   end if;
@@ -491,6 +493,36 @@ begin
         updated_at = now()
     where id = p_id
     returning * into v_row;
+
+  -- Histórico: só grava os campos que realmente mudaram (estoque_historico).
+  -- Concatenação explícita em vez de jsonb_strip_nulls: strip_nulls é
+  -- recursivo e apagaria também o "de"/"para" quando o valor antigo ou
+  -- novo for nulo (ex. campo que nunca foi preenchido, ou que foi limpo),
+  -- fazendo um campo realmente alterado parecer sem mudança nenhuma.
+  v_diff := '{}'::jsonb;
+  if v_antes.produto is distinct from v_row.produto then
+    v_diff := v_diff || jsonb_build_object('produto', jsonb_build_object('de', v_antes.produto, 'para', v_row.produto));
+  end if;
+  if v_antes.un is distinct from v_row.un then
+    v_diff := v_diff || jsonb_build_object('un', jsonb_build_object('de', v_antes.un, 'para', v_row.un));
+  end if;
+  if v_antes.saldo is distinct from v_row.saldo then
+    v_diff := v_diff || jsonb_build_object('saldo', jsonb_build_object('de', v_antes.saldo, 'para', v_row.saldo));
+  end if;
+  if v_antes.categoria is distinct from v_row.categoria then
+    v_diff := v_diff || jsonb_build_object('categoria', jsonb_build_object('de', v_antes.categoria, 'para', v_row.categoria));
+  end if;
+  if v_antes.ata is distinct from v_row.ata then
+    v_diff := v_diff || jsonb_build_object('ata', jsonb_build_object('de', v_antes.ata, 'para', v_row.ata));
+  end if;
+  if v_antes.preco_ata is distinct from v_row.preco_ata then
+    v_diff := v_diff || jsonb_build_object('preco_ata', jsonb_build_object('de', v_antes.preco_ata, 'para', v_row.preco_ata));
+  end if;
+
+  if v_diff <> '{}'::jsonb then
+    insert into estoque_historico (estoque_id, produto, categoria, detalhes)
+    values (v_row.id, v_row.produto, v_row.categoria, v_diff);
+  end if;
 
   return v_row;
 end;
@@ -739,6 +771,31 @@ begin
   return v_row;
 end;
 $$;
+
+-- =====================================================================
+-- estoque_historico: registro append-only de toda edição feita pelo
+-- lápis "Editar Produto" (estoque_editar) — NÃO cobre entrada nem
+-- retirada (retirada já tem seu rastro em `registro`; entrada não
+-- precisa ser auditada por enquanto). `detalhes` guarda só os campos
+-- que realmente mudaram em cada edição, como {"saldo": {"de": 10,
+-- "para": 15}}. Sem RPC própria de escrita — é a própria
+-- estoque_editar (abaixo) que grava aqui, na mesma transação. Leitura
+-- é direto via RLS pública (supabaseSelectAll no app.js), sem RPC.
+-- =====================================================================
+create table if not exists estoque_historico (
+  id bigint generated always as identity primary key,
+  estoque_id bigint references estoque(id) on delete set null,
+  produto text not null,
+  categoria text,
+  detalhes jsonb not null default '{}',
+  criado_em timestamptz not null default now()
+);
+create index if not exists estoque_historico_criado_em_idx on estoque_historico (criado_em desc);
+
+alter table estoque_historico enable row level security;
+drop policy if exists "leitura publica" on estoque_historico;
+create policy "leitura publica" on estoque_historico for select using (true);
+revoke insert, update, delete on estoque_historico from anon, authenticated;
 
 -- =====================================================================
 -- Permissões: as 4 tabelas só aceitam leitura via RLS (002_rls.sql); toda

@@ -1076,11 +1076,17 @@
 
         <!-- Tela 1: Seleção de Categorias -->
         <section id="estoqueCategorySelection">
-          <header style="margin-bottom: 1.5rem;">
+          <header style="margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
             <div class="header-title-container">
               <h1>Consulta de Estoque</h1>
               <p>Selecione a categoria de produtos para consultar as quantidades disponíveis</p>
             </div>
+            <button id="btnAbrirHistoricoEstoque" class="btn-refresh">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+              </svg>
+              Histórico
+            </button>
           </header>
 
           <div class="categories-grid">
@@ -1147,6 +1153,79 @@
                 </thead>
                 <tbody id="estoqueTableBody">
                   <!-- Inserido dinamicamente -->
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </section>
+
+        <!-- Tela 3: Histórico de Edições do Estoque -->
+        <section id="estoqueHistoricoSection" class="hidden">
+          <button id="btnVoltarHistoricoEstoque" class="form-header-back">
+            <svg style="width:16px;height:16px" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
+            </svg>
+            Voltar para Categorias
+          </button>
+
+          <div class="form-header-title" style="margin: 1rem 0 1.5rem 0;">
+            Histórico de Edições do Estoque
+          </div>
+
+          <section class="filters-panel">
+            <div class="filters-title">
+              <svg style="width:16px;height:16px" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path>
+              </svg>
+              Filtros
+            </div>
+            <div class="filters-grid">
+              <div class="filter-group">
+                <label for="historicoEstoqueFilterDateStart">Data Inicial</label>
+                <input type="date" id="historicoEstoqueFilterDateStart">
+              </div>
+              <div class="filter-group">
+                <label for="historicoEstoqueFilterDateEnd">Data Final</label>
+                <input type="date" id="historicoEstoqueFilterDateEnd">
+              </div>
+              <div class="filter-group">
+                <label for="historicoEstoqueFilterCategory">Categoria</label>
+                <select id="historicoEstoqueFilterCategory">
+                  <option value="all">Todas as Categorias</option>
+                </select>
+              </div>
+              <div class="filter-group">
+                <label for="historicoEstoqueFilterSearch">Produto</label>
+                <input type="text" id="historicoEstoqueFilterSearch" placeholder="Buscar produto...">
+              </div>
+            </div>
+          </section>
+
+          <section class="table-card">
+            <div class="table-header">
+              <div class="table-title">Edições Registradas</div>
+              <div class="table-header-actions">
+                <span id="historicoEstoqueContador" style="font-size: 0.8125rem; color: var(--text-secondary); margin-right: 0.5rem;"></span>
+                <button id="btnExportHistoricoEstoquePDF" class="btn btn-secondary btn-export-pdf">
+                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15V3m0 12l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"></path>
+                  </svg>
+                  Extrair PDF
+                </button>
+              </div>
+            </div>
+            <div class="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Data/Hora</th>
+                    <th>Produto</th>
+                    <th>Categoria</th>
+                    <th>Alterações</th>
+                  </tr>
+                </thead>
+                <tbody id="historicoEstoqueTableBody">
+                  <tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Nenhuma edição encontrada para esses filtros</td></tr>
                 </tbody>
               </table>
             </div>

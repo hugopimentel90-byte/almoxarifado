@@ -3168,6 +3168,18 @@ function initializeEstoqueModule() {
     showEstoqueScreen('categories');
   });
 
+  document.getElementById('btnAbrirHistoricoEstoque').addEventListener('click', () => {
+    showEstoqueScreen('historico');
+  });
+  document.getElementById('btnVoltarHistoricoEstoque').addEventListener('click', () => {
+    showEstoqueScreen('categories');
+  });
+  document.getElementById('btnExportHistoricoEstoquePDF').addEventListener('click', exportHistoricoEstoquePDF);
+  ['historicoEstoqueFilterDateStart', 'historicoEstoqueFilterDateEnd', 'historicoEstoqueFilterCategory'].forEach(id => {
+    document.getElementById(id).addEventListener('change', applyHistoricoEstoqueFilters);
+  });
+  document.getElementById('historicoEstoqueFilterSearch').addEventListener('input', applyHistoricoEstoqueFilters);
+
   document.getElementById('estoqueSearchInput').addEventListener('input', (e) => {
     estoqueSearchQuery = e.target.value;
     renderEstoqueTable();
@@ -3185,16 +3197,22 @@ function initializeEstoqueModule() {
 function showEstoqueScreen(screen) {
   const categorySelection = document.getElementById('estoqueCategorySelection');
   const listSection = document.getElementById('estoqueListSection');
+  const historicoSection = document.getElementById('estoqueHistoricoSection');
+
+  categorySelection.classList.add('hidden');
+  listSection.classList.add('hidden');
+  historicoSection.classList.add('hidden');
 
   if (screen === 'categories') {
     categorySelection.classList.remove('hidden');
-    listSection.classList.add('hidden');
     currentEstoqueCategory = "";
     estoqueSearchQuery = "";
     document.getElementById('estoqueSearchInput').value = '';
   } else if (screen === 'list') {
-    categorySelection.classList.add('hidden');
     listSection.classList.remove('hidden');
+  } else if (screen === 'historico') {
+    historicoSection.classList.remove('hidden');
+    carregarHistoricoEstoque();
   }
 }
 
@@ -3215,6 +3233,163 @@ async function openEstoqueCategory(category) {
   }
 
   renderEstoqueTable();
+}
+
+// --- HISTÓRICO DE EDIÇÕES DO ESTOQUE ---
+
+let historicoEstoqueRawData = [];
+let historicoEstoqueFilteredData = [];
+
+/** Carrega estoque_historico (RLS pública, só leitura) e popula filtros + tabela. */
+async function carregarHistoricoEstoque() {
+  const tbody = document.getElementById('historicoEstoqueTableBody');
+  tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Carregando histórico...</td></tr>`;
+  try {
+    const data = await supabaseSelectAll('estoque_historico');
+    historicoEstoqueRawData = (data || [])
+      .map(item => ({ ...item, criadoEmDate: new Date(item.criado_em) }))
+      .sort((a, b) => b.criadoEmDate - a.criadoEmDate);
+    populateHistoricoEstoqueFilters();
+    applyHistoricoEstoqueFilters();
+  } catch (e) {
+    console.error('Erro ao carregar histórico do estoque:', e);
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--color-danger); padding: 2rem;">Erro ao carregar histórico: ${e.message}</td></tr>`;
+  }
+}
+
+/** Mesmo padrão de populateRelatorioFilters: preserva seleção ao recarregar. */
+function populateHistoricoEstoqueFilters() {
+  const categorySelect = document.getElementById('historicoEstoqueFilterCategory');
+  const prevCategory = categorySelect.value;
+  categorySelect.innerHTML = '<option value="all">Todas as Categorias</option>';
+
+  const categoriasConhecidas = [...document.querySelectorAll('#estoqueCategorySelection .category-card')]
+    .map(card => card.getAttribute('data-category'));
+  const categoriasHistorico = historicoEstoqueRawData.map(item => item.categoria).filter(Boolean);
+  const categorias = [...new Set([...categoriasConhecidas, ...categoriasHistorico])].sort();
+
+  categorias.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c;
+    opt.textContent = c;
+    categorySelect.appendChild(opt);
+  });
+
+  categorySelect.value = [...categorySelect.options].some(o => o.value === prevCategory) ? prevCategory : 'all';
+
+  if (!document.getElementById('historicoEstoqueFilterDateStart').value && historicoEstoqueRawData.length > 0) {
+    const dates = historicoEstoqueRawData.map(item => item.criadoEmDate);
+    const minDate = new Date(Math.min(...dates));
+    const maxDate = new Date(Math.max(...dates));
+    const toISODate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    document.getElementById('historicoEstoqueFilterDateStart').value = toISODate(minDate);
+    document.getElementById('historicoEstoqueFilterDateEnd').value = toISODate(maxDate);
+  }
+}
+
+function applyHistoricoEstoqueFilters() {
+  const dateStartVal = document.getElementById('historicoEstoqueFilterDateStart').value;
+  const dateEndVal = document.getElementById('historicoEstoqueFilterDateEnd').value;
+  const categoryVal = document.getElementById('historicoEstoqueFilterCategory').value;
+  const searchVal = document.getElementById('historicoEstoqueFilterSearch').value.trim().toLowerCase();
+
+  const start = dateStartVal ? new Date(dateStartVal + 'T00:00:00') : null;
+  const end = dateEndVal ? new Date(dateEndVal + 'T23:59:59') : null;
+
+  historicoEstoqueFilteredData = historicoEstoqueRawData.filter(item => {
+    if (start && item.criadoEmDate < start) return false;
+    if (end && item.criadoEmDate > end) return false;
+    if (categoryVal !== 'all' && item.categoria !== categoryVal) return false;
+    if (searchVal && !item.produto.toLowerCase().includes(searchVal)) return false;
+    return true;
+  });
+
+  renderHistoricoEstoqueTable();
+}
+
+/** Converte o jsonb {campo: {de, para}} salvo pela RPC estoque_editar num texto "Campo: de → para". */
+function formatHistoricoEstoqueDetalhe(detalhes) {
+  if (!detalhes || typeof detalhes !== 'object' || Object.keys(detalhes).length === 0) return '—';
+  const labels = { produto: 'Produto', un: 'Unidade', saldo: 'Saldo', categoria: 'Categoria', ata: 'ATA', preco_ata: 'Preço ATA' };
+  const formatValor = (campo, valor) => {
+    if (valor === null || valor === undefined || valor === '') return '—';
+    if (campo === 'preco_ata') return formatCurrencyBRL(valor);
+    if (campo === 'saldo') return formatDataLabelValue(valor);
+    if (campo === 'ata') return valor ? 'Sim' : 'Não';
+    return String(valor);
+  };
+  return Object.entries(detalhes)
+    .map(([campo, { de, para }]) => `${labels[campo] || campo}: ${formatValor(campo, de)} → ${formatValor(campo, para)}`)
+    .join(' · ');
+}
+
+function renderHistoricoEstoqueTable() {
+  const tbody = document.getElementById('historicoEstoqueTableBody');
+  document.getElementById('historicoEstoqueContador').textContent = `${historicoEstoqueFilteredData.length} registro(s)`;
+
+  if (historicoEstoqueFilteredData.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: var(--text-secondary); padding: 2rem;">Nenhuma edição encontrada para esses filtros</td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = historicoEstoqueFilteredData.map(item => `
+    <tr>
+      <td>${formatSupabaseTimestampBR(item.criado_em)}</td>
+      <td>${item.produto}</td>
+      <td>${item.categoria || '—'}</td>
+      <td>${formatHistoricoEstoqueDetalhe(item.detalhes)}</td>
+    </tr>
+  `).join('');
+}
+
+/** Clone de exportRelatorioPDF (jsPDF + autoTable), mesmo cabeçalho/estilo, pro Histórico do Estoque. */
+function exportHistoricoEstoquePDF() {
+  if (historicoEstoqueFilteredData.length === 0) {
+    showToast('Nenhum registro para exportar com esses filtros.', 'warning');
+    return;
+  }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF();
+
+  const now = new Date();
+  const generatedAt = `${now.toLocaleDateString('pt-BR')} ${now.toLocaleTimeString('pt-BR')}`;
+
+  const dateStartVal = document.getElementById('historicoEstoqueFilterDateStart').value;
+  const dateEndVal = document.getElementById('historicoEstoqueFilterDateEnd').value;
+  const categoryVal = document.getElementById('historicoEstoqueFilterCategory').value;
+
+  doc.setFontSize(16);
+  doc.setTextColor(15, 23, 42);
+  doc.text('Histórico de Edições do Estoque', 14, 18);
+
+  doc.setFontSize(9.5);
+  doc.setTextColor(71, 85, 105);
+  const periodo = `Período: ${dateStartVal ? formatSupabaseDateBR(dateStartVal) : '—'} a ${dateEndVal ? formatSupabaseDateBR(dateEndVal) : '—'}`;
+  const filtros = `Categoria: ${categoryVal === 'all' ? 'Todas' : categoryVal}`;
+  doc.text(periodo, 14, 25);
+  doc.text(filtros, 14, 30.5);
+  doc.text(`Gerado em: ${generatedAt}`, 14, 36);
+
+  const tableBody = historicoEstoqueFilteredData.map(item => [
+    formatSupabaseTimestampBR(item.criado_em),
+    item.produto,
+    item.categoria || '—',
+    formatHistoricoEstoqueDetalhe(item.detalhes)
+  ]);
+
+  doc.autoTable({
+    startY: 41,
+    head: [['Data/Hora', 'Produto', 'Categoria', 'Alterações']],
+    body: tableBody,
+    styles: { font: 'helvetica', fontSize: 8, cellPadding: 2.5 },
+    headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    columnStyles: { 3: { cellWidth: 90 } }
+  });
+
+  const fileDate = now.toISOString().split('T')[0];
+  doc.save(`Historico_Estoque_${fileDate}.pdf`);
 }
 
 function renderEstoqueLoadingState() {
