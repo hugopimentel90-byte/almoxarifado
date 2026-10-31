@@ -358,6 +358,26 @@
     </div>
   </div>
 
+  <!-- Modal: resolução manual de itens do PIM sem nome exato na aba Estoque
+       (aberto a partir de handleConfirmRegistrarRetiradaLiberacao, antes de
+       lançar a retirada, quando sobra algum item sem correspondência exata
+       dentro da categoria escolhida). -->
+  <div id="resolverItensRetiradaModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h2 class="modal-title">Itens sem correspondência exata no Estoque</h2>
+      <p class="modal-subtitle">
+        Os itens abaixo não batem com nenhum nome exato cadastrado na categoria escolhida. Selecione a qual produto do Estoque cada um corresponde, ou deixe como "Não descontar" para manter o comportamento de hoje.
+      </p>
+
+      <div id="resolverItensRetiradaLista" class="resolver-itens-lista"></div>
+
+      <div class="form-actions" style="margin-top: 1.5rem;">
+        <button id="btnCancelResolverItensRetirada" class="btn btn-secondary">Cancelar</button>
+        <button id="btnConfirmResolverItensRetirada" class="btn btn-submit">Confirmar e continuar</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal de edição direta de um produto do Estoque (lápis na Consulta de Estoque) —
        só aparece com o Supabase ativado (ver podeEditarEstoque em app.js), já que
        enquanto o site usa a planilha a edição continua sendo feita direto no Sheets. -->

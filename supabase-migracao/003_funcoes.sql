@@ -305,7 +305,8 @@ create or replace function liberacao_registrar_retirada(
   p_senha text,
   p_setor text,
   p_categoria text,
-  p_tempo numeric default null
+  p_tempo numeric default null,
+  p_correspondencias jsonb default '{}'
 ) returns jsonb
 language plpgsql
 security definer
@@ -363,10 +364,23 @@ begin
   -- Monta os itens no formato esperado por retirar_material. Setor e
   -- categoria vêm sempre do override (nunca do card); a unidade é
   -- resolvida pela aba Estoque, quando o produto bate por nome exato.
+  -- "produto_resolvido" usa a correspondência manual escolhida pelo
+  -- usuário (p_correspondencias, montada no app.js quando o texto do PIM
+  -- não bate exato com nenhum produto do Estoque — ver
+  -- resolverItensRetiradaModal) no lugar do texto cru do PIM, quando
+  -- existir; isso faz o item bater no LEFT JOIN abaixo (acha a unidade
+  -- certa) e também já grava no Registro com o nome exato do Estoque.
+  with itens_resolvidos as (
+    select
+      t.elem,
+      t.ord,
+      coalesce(nullif(trim(p_correspondencias->>trim(t.elem->>'produto')), ''), trim(t.elem->>'produto')) as produto_resolvido
+    from jsonb_array_elements(v_itens_validos) with ordinality as t(elem, ord)
+  )
   select jsonb_agg(
       jsonb_build_object(
-        'produto', t.elem->>'produto',
-        'qtd', (t.elem->>'qtd')::numeric,
+        'produto', r.produto_resolvido,
+        'qtd', (r.elem->>'qtd')::numeric,
         'un', coalesce(e.un, ''),
         'categoria', v_categoria,
         'data', to_char(v_data_lancamento, 'YYYY-MM-DD'),
@@ -374,22 +388,29 @@ begin
         'setor', v_setor,
         'pedido', v_card.titulo,
         'mes', v_mes,
-        'tempoRetiradaMinutos', case when t.ord = 1 and p_tempo is not null then p_tempo else null end
+        'tempoRetiradaMinutos', case when r.ord = 1 and p_tempo is not null then p_tempo else null end
       )
-      order by t.ord
+      order by r.ord
     )
   into v_items
-  from jsonb_array_elements(v_itens_validos) with ordinality as t(elem, ord)
-  left join estoque e on lower(e.produto) = lower(trim(t.elem->>'produto'));
+  from itens_resolvidos r
+  left join estoque e on lower(e.produto) = lower(r.produto_resolvido);
 
-  -- Produtos do PIM sem nome correspondente exato na aba Estoque — ainda
-  -- entram no Registro (pra não perder a quantidade), mas sem baixa de
-  -- estoque. Fica um aviso registrado no card.
-  select array_agg(trim(t.elem->>'produto'))
+  -- Produtos sem correspondência (nem exata, nem escolhida manualmente)
+  -- com nenhum nome correspondente na aba Estoque — ainda entram no
+  -- Registro (pra não perder a quantidade), mas sem baixa de estoque.
+  -- Fica um aviso registrado no card.
+  with itens_resolvidos as (
+    select
+      t.elem,
+      coalesce(nullif(trim(p_correspondencias->>trim(t.elem->>'produto')), ''), trim(t.elem->>'produto')) as produto_resolvido
+    from jsonb_array_elements(v_itens_validos) as t(elem)
+  )
+  select array_agg(r.produto_resolvido)
   into v_nao_encontrados
-  from jsonb_array_elements(v_itens_validos) as t(elem)
+  from itens_resolvidos r
   where not exists (
-    select 1 from estoque e where lower(e.produto) = lower(trim(t.elem->>'produto'))
+    select 1 from estoque e where lower(e.produto) = lower(r.produto_resolvido)
   );
 
   begin
@@ -807,7 +828,7 @@ grant execute on function liberacao_criar(text, text, text, text, text, jsonb) t
 grant execute on function liberacao_avancar(text, text, jsonb) to anon, authenticated;
 grant execute on function liberacao_recusar(text) to anon, authenticated;
 grant execute on function liberacao_excluir(text) to anon, authenticated;
-grant execute on function liberacao_registrar_retirada(text, text, text, text, numeric) to anon, authenticated;
+grant execute on function liberacao_registrar_retirada(text, text, text, text, numeric, jsonb) to anon, authenticated;
 grant execute on function estoque_editar(bigint, text, text, numeric, text, boolean, numeric, text) to anon, authenticated;
 grant execute on function demanda_editar_ponto_pedido(text, numeric, text) to anon, authenticated;
 grant execute on function demanda_editar_fornecedor(text, text, text, numeric, numeric, text, text) to anon, authenticated;

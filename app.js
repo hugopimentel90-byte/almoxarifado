@@ -444,14 +444,15 @@ async function callLiberacaoExcluir({ id }) {
  * liberacao_registrar_retirada, no 003_funcoes.sql, sobre por que a função
  * devolve {registrado, aviso} em vez de lançar exceção nesses casos).
  */
-async function callLiberacaoRegistrarRetirada({ id, setor, categoria, tempoRetiradaMinutos, senha }) {
+async function callLiberacaoRegistrarRetirada({ id, setor, categoria, tempoRetiradaMinutos, senha, correspondencias }) {
   if (USE_SUPABASE) {
     const { data, error } = await supabaseClient.rpc('liberacao_registrar_retirada', {
       p_id: id,
       p_senha: senha,
       p_setor: setor,
       p_categoria: categoria,
-      p_tempo: (tempoRetiradaMinutos !== undefined && tempoRetiradaMinutos !== '') ? tempoRetiradaMinutos : null
+      p_tempo: (tempoRetiradaMinutos !== undefined && tempoRetiradaMinutos !== '') ? tempoRetiradaMinutos : null,
+      p_correspondencias: correspondencias || {}
     });
     if (error) return { status: 'error', message: error.message };
     if (data && data.registrado === false) return { status: 'error', message: data.aviso };
@@ -6630,6 +6631,14 @@ function initializeLiberacaoModule() {
     }
   });
 
+  document.getElementById('btnCancelResolverItensRetirada').addEventListener('click', fecharResolverItensRetiradaModal);
+  document.getElementById('btnConfirmResolverItensRetirada').addEventListener('click', handleConfirmarResolverItensRetirada);
+  document.getElementById('resolverItensRetiradaModal').addEventListener('click', (e) => {
+    if (e.target.id === 'resolverItensRetiradaModal') {
+      fecharResolverItensRetiradaModal();
+    }
+  });
+
   document.getElementById('liberacaoActionPassword').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -7630,6 +7639,14 @@ function openRegistrarRetiradaLiberacaoModal(card) {
   document.getElementById('registrarRetiradaSenha').value = '';
   document.getElementById('registrarRetiradaError').classList.add('hidden');
   document.getElementById('registrarRetiradaLiberacaoModal').classList.remove('hidden');
+
+  // A aba Liberação não carrega stockData sozinha (só Retirada/Estoque/etc.
+  // fazem isso ao abrir) — sem isso, handleConfirmRegistrarRetiradaLiberacao
+  // não acharia NENHUM candidato pra resolver itens sem nome exato. Dispara
+  // aqui (ao abrir o modal) pra já estar pronto quando o usuário confirmar.
+  if (!isReadOnly) {
+    stockLevelsFetchPromise = fetchStockLevels();
+  }
 }
 
 function closeRegistrarRetiradaLiberacaoModal() {
@@ -7669,6 +7686,58 @@ async function handleConfirmRegistrarRetiradaLiberacao() {
     return;
   }
 
+  const dadosRetirada = { card, setor, categoria, tempoStr, senha };
+
+  // Garante que stockData (carregado ao abrir o modal, ver
+  // openRegistrarRetiradaLiberacaoModal) já chegou antes de resolver os
+  // itens — sem isso, todo item pareceria "sem correspondência" e a lista
+  // de candidatos apareceria vazia.
+  const confirmBtnAguardando = document.getElementById('btnConfirmRegistrarRetiradaLiberacao');
+  if (stockLevelsFetchPromise) {
+    setButtonProcessing(confirmBtnAguardando, 'Carregando estoque...');
+    await stockLevelsFetchPromise;
+    clearButtonProcessing(confirmBtnAguardando);
+  }
+
+  // Itens do PIM sem nome EXATO na aba Estoque (mesma regra que a RPC já
+  // aplica) — pergunta pro usuário a qual produto da categoria escolhida
+  // cada um corresponde, em vez de só avisar depois que a retirada já foi
+  // lançada sem baixa de estoque pra eles.
+  const itensValidos = (card.itens || []).filter(it => (it.produto || '').trim() !== '' && Number(it.qtd) > 0);
+  const candidatosCategoria = stockData.filter(s => getCategoryForProduct(s.produto).toLowerCase() === categoria.toLowerCase());
+
+  const pendentesPorChave = new Map();
+  itensValidos.forEach(it => {
+    const produtoOriginal = it.produto.trim();
+    const chave = produtoOriginal.toLowerCase();
+    if (pendentesPorChave.has(chave)) return;
+    const temMatchExato = stockData.some(s => s.produto.toLowerCase() === chave);
+    if (temMatchExato) return;
+    pendentesPorChave.set(chave, {
+      produtoOriginal,
+      sugestao: encontrarMelhorItemEstoque(produtoOriginal, candidatosCategoria)
+    });
+  });
+  const pendentes = [...pendentesPorChave.values()];
+
+  if (pendentes.length > 0) {
+    abrirResolverItensRetiradaModal(pendentes, candidatosCategoria, dadosRetirada);
+    return;
+  }
+
+  await finalizarRegistrarRetiradaLiberacao(dadosRetirada, {});
+}
+
+/**
+ * Última etapa de "Registrar Retirada": confirmação + chamada da RPC. Vira
+ * uma função separada porque pode ser disparada direto por
+ * handleConfirmRegistrarRetiradaLiberacao (quando todo item bate exato com
+ * a aba Estoque) ou só depois, por handleConfirmarResolverItensRetirada
+ * (quando o usuário precisou resolver manualmente algum item primeiro).
+ */
+async function finalizarRegistrarRetiradaLiberacao({ card, setor, categoria, tempoStr, senha }, correspondencias) {
+  const errorEl = document.getElementById('registrarRetiradaError');
+
   const confirmed = window.confirm(
     `Lançar os itens do PIM "${card.titulo}" como uma retirada na aba Registro (descontando do Estoque)? Essa ação não pode ser desfeita.`
   );
@@ -7683,7 +7752,8 @@ async function handleConfirmRegistrarRetiradaLiberacao() {
       setor,
       categoria,
       tempoRetiradaMinutos: tempoStr === '' ? '' : (parseInt(tempoStr, 10) || 0),
-      senha
+      senha,
+      correspondencias
     });
     if (resData && resData.status === 'success') {
       showToast(resData.aviso ? `Retirada registrada, mas: ${resData.aviso}` : "Retirada registrada na aba Registro!", resData.aviso ? "warning" : "success");
@@ -7700,6 +7770,72 @@ async function handleConfirmRegistrarRetiradaLiberacao() {
   } finally {
     clearButtonProcessing(confirmBtn);
   }
+}
+
+// --- RESOLUÇÃO MANUAL DE ITENS SEM CORRESPONDÊNCIA EXATA NO ESTOQUE ---
+
+let resolverItensRetiradaDados = null;
+
+/**
+ * Lista, pra cada item do PIM sem nome exato na aba Estoque, um <select>
+ * com os produtos da categoria escolhida — pré-selecionado na sugestão do
+ * mesmo matcher de texto usado no Mapeamento CATMAT
+ * (encontrarMelhorItemEstoque, app.js), quando ele achar alguma. A escolha
+ * final é sempre do usuário: a opção "Não descontar..." fica disponível
+ * pra quem preferir manter o comportamento de hoje pra aquele item.
+ */
+function abrirResolverItensRetiradaModal(pendentes, candidatos, dadosRetirada) {
+  resolverItensRetiradaDados = dadosRetirada;
+
+  const lista = document.getElementById('resolverItensRetiradaLista');
+  lista.innerHTML = '';
+
+  pendentes.forEach(pendente => {
+    const row = document.createElement('div');
+    row.className = 'resolver-item-row';
+
+    const nomeEl = document.createElement('div');
+    nomeEl.className = 'resolver-item-nome';
+    nomeEl.textContent = pendente.produtoOriginal;
+    row.appendChild(nomeEl);
+
+    const select = document.createElement('select');
+    select.dataset.produtoOriginal = pendente.produtoOriginal;
+
+    const optNaoDescontar = document.createElement('option');
+    optNaoDescontar.value = '';
+    optNaoDescontar.textContent = 'Não descontar do estoque (manter como está hoje)';
+    select.appendChild(optNaoDescontar);
+
+    candidatos.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.produto;
+      opt.textContent = `${c.produto} (saldo atual: ${formatDataLabelValue(c.total)})`;
+      select.appendChild(opt);
+    });
+
+    select.value = pendente.sugestao ? pendente.sugestao.produto : '';
+    row.appendChild(select);
+    lista.appendChild(row);
+  });
+
+  document.getElementById('resolverItensRetiradaModal').classList.remove('hidden');
+}
+
+function fecharResolverItensRetiradaModal() {
+  document.getElementById('resolverItensRetiradaModal').classList.add('hidden');
+  resolverItensRetiradaDados = null;
+}
+
+function handleConfirmarResolverItensRetirada() {
+  const correspondencias = {};
+  document.querySelectorAll('#resolverItensRetiradaLista select').forEach(select => {
+    if (select.value) correspondencias[select.dataset.produtoOriginal] = select.value;
+  });
+
+  const dados = resolverItensRetiradaDados;
+  fecharResolverItensRetiradaModal();
+  finalizarRegistrarRetiradaLiberacao(dados, correspondencias);
 }
 
 async function handleLiberacaoReject() {
