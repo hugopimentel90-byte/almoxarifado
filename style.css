@@ -707,6 +707,12 @@ header {
 .kpi-card.kpi-pendente-aprovacao { border-left: 4px solid var(--color-danger); }
 .kpi-card.kpi-pendente-aprovacao .kpi-icon { background-color: var(--color-danger-light); color: var(--color-danger); }
 
+.kpi-card.kpi-ponto-pedido-vermelho { border-left: 4px solid var(--color-danger); }
+.kpi-card.kpi-ponto-pedido-vermelho .kpi-icon { background-color: var(--color-danger-light); color: var(--color-danger); }
+
+.kpi-card.kpi-ponto-pedido-amarelo { border-left: 4px solid var(--color-warning); }
+.kpi-card.kpi-ponto-pedido-amarelo .kpi-icon { background-color: var(--color-warning-light); color: var(--color-warning); }
+
 /* Charts Grid */
 .charts-grid {
   display: grid;

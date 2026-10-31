@@ -785,6 +785,37 @@
             <div class="kpi-value" id="kpiPimsPendentesAprovacao">0</div>
             <div class="kpi-footer">Ainda não liberados (Setor/Encarregado/Imediato)</div>
           </div>
+
+          <!-- Itens do Estoque no status "Encomendar" do Ponto de Pedido
+               (saldo <= Ponto de Pedido) — foto do estado atual, não reage
+               aos filtros de período/setor/categoria do Dashboard. -->
+          <div class="kpi-card kpi-ponto-pedido-vermelho">
+            <div class="kpi-header">
+              <span class="kpi-title">Itens a Encomendar</span>
+              <div class="kpi-icon">
+                <svg style="width:20px;height:20px" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                </svg>
+              </div>
+            </div>
+            <div class="kpi-value" id="kpiItensEncomendar">0</div>
+            <div class="kpi-footer">Status "Encomendar" no Ponto de Pedido</div>
+          </div>
+
+          <!-- Itens no status "Próximo" (perto do Ponto de Pedido, ainda não
+               abaixo dele). -->
+          <div class="kpi-card kpi-ponto-pedido-amarelo">
+            <div class="kpi-header">
+              <span class="kpi-title">Itens Status Próximo</span>
+              <div class="kpi-icon">
+                <svg style="width:20px;height:20px" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+              </div>
+            </div>
+            <div class="kpi-value" id="kpiItensProximo">0</div>
+            <div class="kpi-footer">Aproximando-se do Ponto de Pedido</div>
+          </div>
         </section>
 
         <!-- Seção de Gráficos -->
@@ -826,6 +857,16 @@
             <div class="chart-title">Pedidos por Setor</div>
             <div class="chart-wrapper">
               <canvas id="chartOrdersBySector"></canvas>
+            </div>
+          </div>
+
+          <!-- Gráfico 6: foto do estado atual do Estoque (não reage aos
+               filtros de período/setor/categoria do Dashboard, igual aos
+               KPIs "Itens a Encomendar"/"Itens Status Próximo"). -->
+          <div class="chart-card chart-card--full">
+            <div class="chart-title">Itens Precisando de Atenção no Ponto de Pedido, por Categoria</div>
+            <div class="chart-wrapper">
+              <canvas id="chartPontoPedidoAlertas"></canvas>
             </div>
           </div>
         </section>

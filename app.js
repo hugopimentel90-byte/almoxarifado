@@ -835,6 +835,7 @@ function switchTab(tabName) {
 
     // Força redibujo dos gráficos ao abrir
     updateCharts();
+    carregarAlertaPontoPedidoDashboard();
   } else if (tabName === 'retirada') {
     menuRetirada.classList.add('active');
     viewRetirada.classList.remove('hidden');
@@ -3699,6 +3700,76 @@ async function carregarPontoPedidoDados() {
   await Promise.all([stockLevelsFetchPromise, fetchDemandaData()]);
   aplicarPontoPedidoDaDemanda();
   renderPontoPedidoTable();
+}
+
+/**
+ * Mesmo carregamento de carregarPontoPedidoDados(), só que alimenta os KPIs
+ * "Itens a Encomendar"/"Itens Status Próximo" e o gráfico de barras por
+ * categoria do Dashboard, em vez da tabela da aba Ponto de Pedido. É uma
+ * foto do estado ATUAL do estoque — por isso não participa de
+ * applyFilters()/updateKPIs() (que filtram rawData por período/setor), e
+ * precisa do próprio fetch porque o Dashboard é a aba inicial e pode abrir
+ * antes de qualquer aba que já carregue stockData/demandaData sozinha.
+ */
+async function carregarAlertaPontoPedidoDashboard() {
+  stockLevelsFetchPromise = fetchStockLevels();
+  await Promise.all([stockLevelsFetchPromise, fetchDemandaData()]);
+  aplicarPontoPedidoDaDemanda();
+  renderAlertaPontoPedidoDashboard();
+}
+
+function renderAlertaPontoPedidoDashboard() {
+  const porCategoria = {}; // { categoria: { vermelho: n, amarelo: n } }
+  let totalVermelho = 0;
+  let totalAmarelo = 0;
+
+  stockData.forEach(item => {
+    const status = getPontoPedidoStatus(item.total, item.pontoPedido);
+    if (status !== 'vermelho' && status !== 'amarelo') return;
+
+    const categoria = getCategoryForProduct(item.produto) || 'Sem categoria';
+    if (!porCategoria[categoria]) porCategoria[categoria] = { vermelho: 0, amarelo: 0 };
+    porCategoria[categoria][status]++;
+
+    if (status === 'vermelho') totalVermelho++;
+    else totalAmarelo++;
+  });
+
+  document.getElementById('kpiItensEncomendar').textContent = formatDataLabelValue(totalVermelho);
+  document.getElementById('kpiItensProximo').textContent = formatDataLabelValue(totalAmarelo);
+
+  const categorias = Object.keys(porCategoria).sort((a, b) =>
+    (porCategoria[b].vermelho + porCategoria[b].amarelo) - (porCategoria[a].vermelho + porCategoria[a].amarelo)
+  );
+
+  updateChart('chartPontoPedidoAlertas', 'bar', categorias, [
+    {
+      label: 'Encomendar',
+      data: categorias.map(c => porCategoria[c].vermelho),
+      backgroundColor: '#ef4444'
+    },
+    {
+      label: 'Próximo',
+      data: categorias.map(c => porCategoria[c].amarelo),
+      backgroundColor: '#f59e0b'
+    }
+  ], {
+    plugins: {
+      legend: { display: true },
+      datalabels: {
+        display: (context) => context.dataset.data[context.dataIndex] > 0,
+        align: 'center',
+        anchor: 'center',
+        color: '#ffffff',
+        font: { family: 'Inter', size: 12, weight: '700' },
+        formatter: formatDataLabelValue
+      }
+    },
+    scales: {
+      x: { ticks: { callback: wrappedTickLabel } },
+      y: { beginAtZero: true, ticks: { precision: 0 } }
+    }
+  });
 }
 
 /**
@@ -8105,6 +8176,7 @@ function initApp() {
   initializeCatmatMapeamentoModule();
   initSidebarToggle();
   fetchDashboardData();
+  carregarAlertaPontoPedidoDashboard();
 }
 
 document.addEventListener('DOMContentLoaded', () => {
